@@ -22,6 +22,7 @@ import {
 	runtimeToPlain,
 	unwrapSensitive
 } from './functions/utils';
+import { isDefect } from './unresolved';
 import { isWrittenOut } from './writtenOut';
 import type { Range } from 'vscode-languageserver';
 
@@ -1746,8 +1747,29 @@ export class ConfigEvaluator {
 		throw new Error(`Cannot index value of type ${current.type}`);
 	}
 
+	/**
+	 * Evaluates an expression so that a fault in it is reported where it is written. The innermost expression at fault
+	 * is the one reported, so a local that calls an unknown function is placed at the call, not at a reference reading
+	 * the local. A value that cannot be known yet is not a fault, and a defect in the evaluator is not the
+	 * configuration's: both pass through as they are.
+	 *
+	 * @param node the expression.
+	 * @param scope the scope of the file it is written in.
+	 * @returns its value.
+	 */
 	private async evalNode(node: TNode | undefined, scope: Scope): Promise<RuntimeValue<ValueType>> {
 		if (!node) throw new Error('Cannot evaluate an empty expression');
+		try {
+			return await this.evalExpression(node, scope);
+		} catch (error) {
+			if (!(error instanceof Error) || isDefect(error) || error instanceof LocatedEvaluationError || error instanceof UnresolvedRenderValueError) throw error;
+			const range = nodeRange(node);
+			if (!range) throw error;
+			throw new LocatedEvaluationError(error.message, scope.filePath, range, { cause: error });
+		}
+	}
+
+	private async evalExpression(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
 		switch (node.type) {
 			case 'string_lit':
 				return makeStringValue(String(node.value ?? ''));
@@ -1790,11 +1812,10 @@ export class ConfigEvaluator {
 			}
 			case 'member_access': {
 				const member = String(node.children?.[1]?.value ?? '');
-				return this.locate(node, scope, async () => this.traverse(await this.evalNode(node.children?.[0], scope), member.split('.'), member));
+				return this.traverse(await this.evalNode(node.children?.[0], scope), member.split('.'), member);
 			}
 			case 'index_expression':
-				return this.locate(node, scope, async () =>
-					this.indexValue(await this.evalNode(node.children?.[0], scope), await this.evalNode(node.children?.[1], scope)));
+				return this.indexValue(await this.evalNode(node.children?.[0], scope), await this.evalNode(node.children?.[1], scope));
 			case 'range_expression': {
 				const start = await this.evalNode(node.children?.[0], scope);
 				const end = await this.evalNode(node.children?.[1], scope);
@@ -1819,9 +1840,9 @@ export class ConfigEvaluator {
 			case 'module_reference':
 			case 'dependency_reference':
 			case 'path_reference':
-				return this.locate(node, scope, () => this.resolveReference(this.referenceParts(node), scope));
+				return this.resolveReference(this.referenceParts(node), scope);
 			case 'traversal_reference':
-				return this.locate(node, scope, () => this.resolveReference([String(node.value ?? '')], scope));
+				return this.resolveReference([String(node.value ?? '')], scope);
 			case 'for_expression': {
 				const [identifier, collection, body] = node.children ?? [];
 				const items = await this.evalNode(collection, scope);
@@ -1840,27 +1861,6 @@ export class ConfigEvaluator {
 			}
 			default:
 				throw new Error(`Cannot evaluate expression of type ${node.type}`);
-		}
-	}
-
-	/**
-	 * Evaluates a reference so that a fault in it is reported where the reference is written. An error that already
-	 * says where it is passes through, so the innermost reference at fault is the one reported. A value that cannot be
-	 * known yet is not a fault and passes through as it is.
-	 *
-	 * @param node the reference being evaluated.
-	 * @param scope the scope of the file it is written in.
-	 * @param evaluate the evaluation.
-	 * @returns the reference's value.
-	 */
-	private async locate(node: TNode, scope: Scope, evaluate: () => Promise<RuntimeValue<ValueType>>): Promise<RuntimeValue<ValueType>> {
-		try {
-			return await evaluate();
-		} catch (error) {
-			if (!(error instanceof Error) || error instanceof LocatedEvaluationError || error instanceof UnresolvedRenderValueError) throw error;
-			const range = nodeRange(node);
-			if (!range) throw error;
-			throw new LocatedEvaluationError(error.message, scope.filePath, range, { cause: error });
 		}
 	}
 

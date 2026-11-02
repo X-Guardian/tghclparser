@@ -97,6 +97,33 @@ describe('semantic configuration evaluation', () => {
 		]);
 	});
 
+	it('places a fault where the expression at fault is written, not where a reference reads it', async () => {
+		const content = [
+			'locals {',
+			'  a = nosuchfn()',
+			'  b = 1 + "x"',
+			'}',
+			'inputs = {',
+			'  x = local.a',
+			'  y = "${local.b}"',
+			'}'
+		].join('\n');
+
+		const result = await evaluator.evaluateUnit(configPath, content, process.cwd());
+		assert.deepEqual(result.problems, [
+			{
+				message: 'Unknown function "nosuchfn"',
+				filePath: configPath,
+				range: { start: { line: 1, character: 6 }, end: { line: 1, character: 16 } }
+			},
+			{
+				message: 'Arithmetic requires numbers',
+				filePath: configPath,
+				range: { start: { line: 2, character: 6 }, end: { line: 2, character: 13 } }
+			}
+		]);
+	});
+
 	it('places a fault inherited through an include in the included configuration', async () => {
 		const os = await import('node:os');
 		const fs = await import('node:fs/promises');
