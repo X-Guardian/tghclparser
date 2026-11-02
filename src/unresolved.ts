@@ -11,7 +11,16 @@ export async function unlessUnresolved<T>(resolve: () => Promise<T>): Promise<T 
 	try {
 		return await resolve();
 	} catch (error) {
-		if (!(error instanceof Error) || error instanceof TypeError || error instanceof RangeError || error instanceof ReferenceError) throw error;
+		if (!(error instanceof Error) || isDefect(error)) throw error;
 		return undefined;
 	}
+}
+
+/**
+ * @param error an Error thrown.
+ * @returns true when it is a defect in this code rather than a fault in what it reads: a TypeError, RangeError or
+ *   ReferenceError.
+ */
+export function isDefect(error: Error): boolean {
+	return error instanceof TypeError || error instanceof RangeError || error instanceof ReferenceError;
 }
