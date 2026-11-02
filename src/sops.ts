@@ -12,7 +12,8 @@ const STRUCTURED_EXTENSIONS = new Set(['.yaml', '.yml', '.json']);
  *
  * @param filePath absolute path of the sops file.
  * @returns the document, or undefined when the file is not YAML or JSON by extension, cannot be read or parsed, or
- *   does not hold a map.
+ *   is not a map holding sops metadata. A file without that metadata is not one sops encrypted, so its values are
+ *   not encrypted ones and the failed decrypt is the answer.
  */
 export async function encryptedSopsDocument(filePath: string): Promise<string | undefined> {
 	const extension = path.extname(filePath).toLowerCase();
@@ -24,8 +25,16 @@ export async function encryptedSopsDocument(filePath: string): Promise<string | 
 	} catch {
 		return undefined;
 	}
-	if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
-	const document: Record<string, unknown> = { ...(parsed as Record<string, unknown>) };
+	if (!isMap(parsed) || !isMap(parsed.sops)) return undefined;
+	const document: Record<string, unknown> = { ...parsed };
 	delete document.sops;
 	return extension === '.json' ? JSON.stringify(document) : yaml.dump(document);
+}
+
+/**
+ * @param value a parsed document or part of one.
+ * @returns true when it is a map of keys to values.
+ */
+function isMap(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

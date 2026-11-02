@@ -755,4 +755,24 @@ describe('semantic configuration evaluation', () => {
 			await fs.rm(root, { recursive: true, force: true });
 		}
 	});
+
+	it('still fails on a file sops cannot decrypt that holds no sops metadata, even when asked to read keys', async () => {
+		const fs = await import('node:fs/promises');
+		const root = await sopsWorkspace();
+		try {
+			await fs.writeFile(path.join(root, 'secrets.sops.yaml'), 'token: plain\n');
+			const reader = new ConfigEvaluator({
+				environmentVariables: {},
+				terraformCommand: '',
+				terraformCliArgs: [],
+				workspaceTrusted: true,
+				readEncryptedSops: true
+			});
+			const result = await withoutSopsKey(root, () => reader.evaluateUnit(path.join(root, 'terragrunt.hcl'), sopsUnit, root));
+			assert.equal(result.valid, false);
+			assert.match(result.error ?? '', /Failed to get the data key/);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
 });
