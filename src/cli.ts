@@ -38,6 +38,7 @@ export interface CLIOptions {
 	noHidden: boolean;
 	dependencies: boolean;
 	dag: boolean;
+	offline: boolean;
 }
 
 /**
@@ -133,6 +134,9 @@ function usage(): string {
 		'  --working-dir <path>   Validate from a working directory',
 		'  --show-config-path     List invalid configuration paths',
 		'  --experiment <name>   Enable a named experiment',
+		'  --offline              Read a sops file that cannot be decrypted as',
+		'                         written, for CI with no keys. Does not check',
+		'                         that secrets decrypt or what is computed from them.',
 		'  --help                 Show this help'
 	].join('\n');
 }
@@ -593,7 +597,7 @@ function discoveryUsage(command: string): string {
  * than to look.
  */
 export function parseArgs(argv: string[]): CLIOptions | 'help' {
-	const options: CLIOptions = { json: false, showConfigPath: false, experiments: [], workingDir: process.cwd(), paths: [], noHidden: false, dependencies: false, dag: false };
+	const options: CLIOptions = { json: false, showConfigPath: false, experiments: [], workingDir: process.cwd(), paths: [], noHidden: false, dependencies: false, dag: false, offline: false };
 	for (let index = 0; index < argv.length; index++) {
 		const argument = argv[index];
 		if (argument.startsWith('--format=')) {
@@ -617,6 +621,7 @@ export function parseArgs(argv: string[]): CLIOptions | 'help' {
 			case '--no-hidden': options.noHidden = true; break;
 			case '--dependencies': options.dependencies = true; break;
 			case '--dag': options.dag = true; break;
+			case '--offline': options.offline = true; break;
 			case '--format': {
 				const value = argv[++index] as CLIOptions['format'];
 				if (!value || !['text', 'json', 'tree', 'dot'].includes(value)) throw new Error(`Unsupported format ${value ?? ''}`);
@@ -1470,6 +1475,16 @@ function generatedEntries(value: unknown): Array<[string, Record<string, unknown
  * `resolveDependency` came to be supplied at two of them and missing at the
  * rest: a unit reading `dependency.<name>.outputs` evaluated in one command
  * and failed in another, for no reason a reader could see.
+ *
+ * @param options.skipOutputs never runs the binary for a dependency's outputs:
+ *   they are the mocks the command is allowed, or unresolved, as Terragrunt's
+ *   `hcl validate` sees them. Only for checking a configuration, never for
+ *   running one.
+ * @param options.readEncryptedSops reads a sops file that cannot be decrypted
+ *   as written: its keys are there, and what is computed from its values is
+ *   unresolved. Only `hcl validate --offline` sets it, and validation writes no
+ *   file; every evaluator that runs or generates reads the real secrets.
+ * @returns the configured evaluator.
  */
 function evaluatorFor(options: {
 	terraformCommand?: string;
@@ -1477,6 +1492,8 @@ function evaluatorFor(options: {
 	experiments?: string[];
 	tfPath?: string;
 	partialRender?: boolean;
+	skipOutputs?: boolean;
+	readEncryptedSops?: boolean;
 } = {}): ConfigEvaluator {
 	const terraformCommand = options.terraformCommand ?? '';
 	return new ConfigEvaluator({
@@ -1487,6 +1504,7 @@ function evaluatorFor(options: {
 		workspaceTrusted: true,
 		allowedPaths,
 		partialRender: options.partialRender,
+		readEncryptedSops: options.readEncryptedSops,
 		// The command decides whether a dependency's mock_outputs may be seen,
 		// so it has to reach the resolver. Without it every evaluation looked
 		// like the same command and a mock could not be scoped at all.
@@ -1494,8 +1512,9 @@ function evaluatorFor(options: {
 		// The executable is resolved here rather than when the evaluator is
 		// built, so a configuration with no dependency to read needs neither
 		// binary installed.
-		resolveDependency: request =>
-			dependencyOutputs(request, options.tfPath ?? tfPathForDependencies(), terraformCommand),
+		resolveDependency: request => options.skipOutputs
+			? unreadDependencyOutputs(request, terraformCommand)
+			: dependencyOutputs(request, options.tfPath ?? tfPathForDependencies(), terraformCommand),
 	});
 }
 
@@ -1551,6 +1570,50 @@ class EmptyRenderOutputs extends Map<string, RuntimeValue<ValueType>> {
 }
 
 /**
+ * The mocks a dependency block allows the running command to see.
+ *
+ * `mock_outputs_allowed_terraform_commands` is not optional in practice and is not defaulted here: terragrunt's own
+ * default is every command, which means a mocked value can reach an `apply` and be written to real infrastructure. A
+ * unit that wants mocks says which commands may see them.
+ *
+ * @param request the dependency the evaluator found, with its evaluated mock settings.
+ * @param terraformCommand the command being run.
+ * @returns the mocked outputs, or undefined when there are none or the command may not see them.
+ * @throws Error when the block declares mocks without naming the commands that may see them.
+ */
+function allowedMocks(request: DependencyRequest, terraformCommand: string): Map<string, RuntimeValue<ValueType>> | undefined {
+	const mocks = request.mockOutputs?.value as Map<string, RuntimeValue<ValueType>> | undefined;
+	if (mocks !== undefined && request.mockOutputsAllowedTerraformCommands === undefined) {
+		throw new Error(
+			`dependency "${request.name}" in ${request.declaredIn} declares mock_outputs without ` +
+			'mock_outputs_allowed_terraform_commands. Name the commands that may ' +
+			'see invented values -- usually ["destroy", "plan", "validate"] -- so ' +
+			'an apply cannot write one to real infrastructure.'
+		);
+	}
+	if (mocks === undefined || !(request.mockOutputsAllowedTerraformCommands ?? []).includes(terraformCommand)) return undefined;
+	return mocks;
+}
+
+/**
+ * A dependency's outputs without reading them: the mocks the command is allowed, or none.
+ *
+ * Terragrunt's `hcl validate` never runs `output`, so a configuration validates where its dependencies cannot be read,
+ * such as a fresh checkout with no providers installed. No outputs is unresolved, which validation does not report.
+ *
+ * @param request the dependency the evaluator found, with its evaluated mock settings.
+ * @param terraformCommand the command being checked for, which decides whether the mocks apply.
+ * @returns `{ outputs: … }` from the allowed mocks, or undefined.
+ */
+async function unreadDependencyOutputs(
+	request: DependencyRequest,
+	terraformCommand: string
+): Promise<RuntimeValue<ValueType> | undefined> {
+	const mocks = allowedMocks(request, terraformCommand);
+	return mocks === undefined ? undefined : outputsValue(new Map(mocks));
+}
+
+/**
  * Reads a dependency's outputs by running `<tf> output -json` where the evaluator found it, applying its mocks only
  * where the author allowed them for the command being run.
  *
@@ -1563,26 +1626,10 @@ async function dependencyOutputs(
 	terraformCommand: string
 ): Promise<RuntimeValue<ValueType> | undefined> {
 	const {name, targetDir: target} = request;
-	const where = `dependency "${name}" in ${request.declaredIn}`;
-
-	// What this unit says to use when the dependency has no outputs to give.
-	//
-	// `mock_outputs_allowed_terraform_commands` is not optional in practice
-	// and is not defaulted here: terragrunt's own default is every command,
-	// which means a mocked value can reach an `apply` and be written to real
-	// infrastructure. A unit that wants mocks says which commands may see
-	// them.
-	const mocks = request.mockOutputs?.value as Map<string, RuntimeValue<ValueType>> | undefined;
-	if (mocks !== undefined && request.mockOutputsAllowedTerraformCommands === undefined) {
-		throw new Error(
-			`${where} declares mock_outputs without ` +
-			'mock_outputs_allowed_terraform_commands. Name the commands that may ' +
-			'see invented values -- usually ["destroy", "plan", "validate"] -- so ' +
-			'an apply cannot write one to real infrastructure.'
-		);
-	}
+	const mocks = allowedMocks(request, terraformCommand);
+	const mocksApply = mocks !== undefined;
+	const declared = request.mockOutputs?.value as Map<string, RuntimeValue<ValueType>> | undefined;
 	const allowed = request.mockOutputsAllowedTerraformCommands ?? [];
-	const mocksApply = mocks !== undefined && allowed.includes(terraformCommand);
 
 	const rendering = terraformCommand === 'render';
 	// Outputs that could not be read are not outputs that were never produced. Only a render, which provisions
@@ -1631,7 +1678,7 @@ async function dependencyOutputs(
 		for (const [key, value] of mocks) {
 			if (!outputs.has(key)) outputs.set(key, value);
 		}
-	} else if (mocks !== undefined) {
+	} else if (declared !== undefined) {
 		// A mock is declared, this command may not see it, and the real output
 		// it would have stood in for is not there either. Saying so here beats
 		// "Missing attribute" from the evaluator, which names the symptom and
@@ -1641,7 +1688,7 @@ async function dependencyOutputs(
 		// one of these, and a `destroy` that proceeds on the strength of an
 		// output nobody produced is exactly the undefined state mocks are
 		// scoped to prevent.
-		const absent = [...mocks.keys()].filter(key => !outputs.has(key));
+		const absent = [...declared.keys()].filter(key => !outputs.has(key));
 		if (absent.length > 0 && terraformCommand !== 'render') {
 			throw new Error(
 				`dependency "${name}" has no ${absent.join(', ')} to read from ${target}, ` +
@@ -2172,7 +2219,7 @@ async function executeTerraformCommand(argv: string[]): Promise<number> {
 	if (await pathExists(stackPath)) await stackGenerate(['--working-dir', options.workingDir]);
 	const configFiles = (await collectFiles(executionWorkingDir)).filter(file => path.basename(file) === 'terragrunt.hcl' || path.basename(file) === 'terragrunt.hcl.json');
 	if (configFiles.length === 0) throw new Error(`No Terragrunt HCL files found under ${executionWorkingDir}`);
-	const diagnostics = (await Promise.all(configFiles.map(file => validateFile(file, executionWorkingDir, [], options.command)))).flat();
+	const diagnostics = (await Promise.all(configFiles.map(file => validateFile(file, executionWorkingDir, [], options.command, false, false)))).flat();
 	if (diagnostics.length > 0) {
 		for (const item of diagnostics) process.stderr.write(`${item.range.filename}: ${item.summary}: ${item.detail}\n`);
 		return 1;
@@ -2328,12 +2375,22 @@ async function inheritedInlineFunctions(
  * than the unapplied unit.
  *
  * A default would have hidden that. The caller knows the command; it says so.
+ *
+ * @param skipOutputs validate without reading dependency outputs, reporting
+ *   nothing for the values that need them, as Terragrunt's `hcl validate`
+ *   does. The run path's pre-flight reads them, as running the unit will.
+ * @param readEncryptedSops validate a sops file that cannot be decrypted as
+ *   written, reporting nothing for what is computed from its secrets. Only
+ *   `hcl validate --offline` sets it; Terragrunt fails on such a file.
+ * @returns the problems found, empty when the configuration is valid.
  */
 async function validateFile(
 	filePath: string,
 	workDir: string,
 	experiments: string[],
-	terraformCommand: string
+	terraformCommand: string,
+	skipOutputs: boolean,
+	readEncryptedSops: boolean
 ): Promise<DiagnosticOutput[]> {
 	const content = await fs.readFile(filePath, 'utf8');
 	if (filePath.endsWith('.json')) {
@@ -2360,14 +2417,16 @@ async function validateFile(
 		.map(item => diagnostic(filePath, content, item));
 	if (diagnostics.length > 0) return diagnostics;
 	if (path.basename(filePath) === 'terragrunt.values.hcl') return [];
-	// A unit that reads `dependency.<name>.outputs` cannot be evaluated without
-	// them, and validation evaluates the unit. Terragrunt resolves them here
-	// too: pointed at a workspace whose dependency was not applied it reaches
-	// into that directory and complains about what it finds there, which is
-	// only possible if it went looking.
-	const evaluator = evaluatorFor({experiments, terraformCommand});
+	// Validation evaluates the unit. Terragrunt's `hcl validate` does so without
+	// running `output` in any dependency: their outputs are the mocks validate
+	// may see, or unknown. The run path's pre-flight reads them, since running
+	// the unit will.
+	const evaluator = evaluatorFor({experiments, terraformCommand, skipOutputs, readEncryptedSops});
 	const result = await evaluator.evaluateUnit(filePath, content, workDir);
-	if (result.valid) return [];
+	// Without outputs, a value that needs a dependency's is unresolved, as is
+	// one computed from a secret read as written: neither is a fault in the
+	// configuration.
+	if (result.valid || (skipOutputs && result.unresolved)) return [];
 	return [{
 		range: { filename: filePath, start: { line: 1, column: 1, byte: 0 }, end: { line: 1, column: 1, byte: 0 } },
 		summary: 'HCL validation error',
@@ -2554,7 +2613,7 @@ async function main(argv: string[]): Promise<number> {
 	const roots = parsed.paths.length > 0 ? parsed.paths.map(target => path.resolve(parsed.workingDir, target)) : [parsed.workingDir];
 	const files = (await Promise.all(roots.map(collectFiles))).flat().sort();
 	if (files.length === 0) throw new Error(`No Terragrunt HCL files found under ${parsed.workingDir}`);
-	const diagnostics = (await Promise.all(files.map(file => validateFile(file, parsed.workingDir, parsed.experiments, 'validate')))).flat();
+	const diagnostics = (await Promise.all(files.map(file => validateFile(file, parsed.workingDir, parsed.experiments, 'validate', true, parsed.offline)))).flat();
 	if (parsed.showConfigPath) {
 		if (diagnostics.length > 0) {
 			const paths = [...new Set(diagnostics.map(item => item.range.filename))];
