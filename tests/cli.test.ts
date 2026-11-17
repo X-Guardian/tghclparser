@@ -1366,23 +1366,67 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
-	it('validates a backend key the editor warns about, as Terragrunt does, and still fails on an error', async () => {
-		// Terragrunt's hcl validate does not check a backend's config keys; the editor's warning about one is advice,
-		// not a validation failure.
+	it('reports a warning without failing, fails on it with --strict, and always fails on an error', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-backend-keys-')));
-		const validate = async (body: string) => {
+		const validate = async (body: string, ...flags: string[]) => {
 			await fs.writeFile(path.join(root, 'terragrunt.hcl'), body);
-			return spawnSync(process.execPath, [cli, 'hcl', 'validate', '--working-dir', root], {cwd: root, encoding: 'utf8'});
+			return spawnSync(process.execPath, [cli, 'hcl', 'validate', ...flags, '--working-dir', root], {cwd: root, encoding: 'utf8'});
 		};
+		const misspelt = 'remote_state {\n  backend = "s3"\n  config = {\n    bukcet = "state"\n  }\n}\n';
 
-		const warned = await validate('remote_state {\n  backend = "s3"\n  config = {\n    bukcet = "state"\n  }\n}\n');
+		const warned = await validate(misspelt);
 		expect(warned.status).to.equal(0, warned.stderr);
-		expect(warned.stderr).to.equal('');
+		expect(warned.stderr).to.equal(`${path.join(root, 'terragrunt.hcl')}: HCL validation warning: Unknown key "bukcet" in remote_state.config for backend "s3"\n`);
+
+		const json = await validate(misspelt, '--json');
+		expect(json.status).to.equal(0, json.stderr);
+		expect(JSON.parse(json.stdout).map((item: {severity: string}) => item.severity)).to.deep.equal(['warning']);
+
+		expect((await validate(misspelt, '--show-config-path')).stdout).to.equal('');
+
+		const strict = await validate(misspelt, '--strict', '--show-config-path');
+		expect(strict.status).to.equal(1, strict.stderr);
+		expect(strict.stdout).to.equal(`${path.join(root, 'terragrunt.hcl')}\n`);
 
 		const failed = await validate('remote_state {\n  backend = "s3"\n  bad_property = false\n  config = {}\n}\n');
 		expect(failed.status).to.equal(1, failed.stderr);
 		expect(failed.stderr).to.contain('bad_property');
+		await fs.rm(root, {recursive: true, force: true});
+	});
+
+	it('checks inputs against the module a unit sources with --inputs', async () => {
+		const cli = path.resolve('dist/cli.cjs');
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-validate-inputs-')));
+		await fs.mkdir(path.join(root, '.git'));
+		await fs.mkdir(path.join(root, 'modules', 'app'), {recursive: true});
+		await fs.writeFile(path.join(root, 'modules', 'app', 'variables.tf'), 'variable "name" {}\nvariable "size" {\n  default = 1\n}\n');
+		const unitDir = path.join(root, 'live', 'app');
+		await fs.mkdir(unitDir, {recursive: true});
+		const unit = path.join(unitDir, 'terragrunt.hcl');
+		const validate = async (inputs: string, ...flags: string[]) => {
+			await fs.writeFile(unit, `terraform {\n  source = "../../modules/app"\n}\ninputs = ${inputs}\n`);
+			return spawnSync(process.execPath, [cli, 'hcl', 'validate', ...flags, '--working-dir', root], {cwd: root, encoding: 'utf8'});
+		};
+
+		const unchecked = await validate('{\n  name  = "app"\n  extra = 1\n}');
+		expect(unchecked.status).to.equal(0, unchecked.stderr);
+		expect(unchecked.stderr).to.equal('');
+
+		const undeclared = await validate('{\n  name  = "app"\n  extra = 1\n}', '--inputs');
+		expect(undeclared.status).to.equal(0, undeclared.stderr);
+		expect(undeclared.stderr).to.equal(`${unit}: HCL validation warning: Input "extra" is not declared by module ../../modules/app\n`);
+
+		const missing = await validate('{\n  size = 2\n}', '--inputs');
+		expect(missing.status).to.equal(0, missing.stderr);
+		expect(missing.stderr).to.equal(`${unit}: HCL validation warning: Missing required module inputs: name\n`);
+
+		const strict = await validate('{\n  size = 2\n}', '--inputs', '--strict');
+		expect(strict.status).to.equal(1, strict.stderr);
+
+		const clean = await validate('{\n  name = "app"\n}', '--inputs', '--strict');
+		expect(clean.status).to.equal(0, clean.stderr);
+		expect(clean.stderr).to.equal('');
 		await fs.rm(root, {recursive: true, force: true});
 	});
 

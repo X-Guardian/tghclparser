@@ -96,7 +96,9 @@ The package provides the `tghclp` executable. Its validation command follows the
 tghclp hcl validate --json --working-dir ./infrastructure
 ```
 
-It recursively validates Terragrunt HCL files, returns a non-zero status when diagnostics are found, and supports JSON diagnostics for automation. Add `--show-config-path` to emit the invalid configuration paths instead of diagnostic objects.
+It recursively validates Terragrunt HCL files, returns a non-zero status when errors are found, and supports JSON diagnostics for automation. Warnings the editor shows, such as a key a backend does not take, are reported too but do not fail validation; add `--strict` to fail on them. Add `--show-config-path` to emit the invalid configuration paths instead of diagnostic objects.
+
+Add `--inputs` to check each unit's `inputs` against the variables of the module it sources, as the editor does: inputs the module does not declare, required variables nothing supplies, and values of the wrong shape. These are warnings. Remote modules are fetched as described in [Remote module sources](#remote-module-sources), so a private registry needs its token, and a module that cannot be fetched is reported as a warning.
 
 Validation does not read a dependency's outputs, as Terragrunt's does not, so it needs no providers installed. A dependency's outputs are its `mock_outputs` where `validate` is allowed to see them, and otherwise unknown: an expression that needs them is not checked, while a fault written beside one is still reported. Sops files are decrypted as when running, so a unit that reads one needs its key.
 

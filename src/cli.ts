@@ -39,6 +39,8 @@ export interface CLIOptions {
 	dependencies: boolean;
 	dag: boolean;
 	offline: boolean;
+	inputs: boolean;
+	strict: boolean;
 }
 
 /**
@@ -98,7 +100,7 @@ interface DiagnosticOutput {
 	};
 	summary: string;
 	detail: string;
-	severity: 'error';
+	severity: 'error' | 'warning';
 }
 
 const fileNames = new Set([
@@ -137,6 +139,9 @@ function usage(): string {
 		'  --offline              Read a sops file that cannot be decrypted as',
 		'                         written, for CI with no keys. Does not check',
 		'                         that secrets decrypt or what is computed from them.',
+		'  --inputs               Check inputs against the variables of the module',
+		'                         each unit sources, fetching remote modules',
+		'  --strict               Fail on warnings as well as errors',
 		'  --help                 Show this help'
 	].join('\n');
 }
@@ -280,6 +285,43 @@ function inspectUsage(): string {
  * @throws when an option is unknown or incomplete, JSON output is not requested, or the configuration is missing
  *   or lies outside the working directory.
  */
+/**
+ * The root an editor would open for a directory: the nearest enclosing git checkout, else the directory itself.
+ *
+ * @param dir the directory to start from.
+ * @returns the workspace root.
+ */
+function enclosingWorkspaceRoot(dir: string): string {
+	for (let current = dir; ; current = path.dirname(current)) {
+		if (fsSync.existsSync(path.join(current, '.git'))) return current;
+		if (path.dirname(current) === current) return dir;
+	}
+}
+
+/**
+ * A workspace that loads the modules units source, fetching remote ones with the ambient credentials, as a
+ * trusted editor workspace does.
+ *
+ * @param workspaceRoot the directory the workspace is rooted at.
+ * @returns the configured workspace.
+ */
+function moduleWorkspace(workspaceRoot: string): Workspace {
+	const workspace = new Workspace();
+	workspace.setWorkspaceRoot(pathToFileURL(workspaceRoot).toString());
+	const insecureHosts = (process.env.TGHCLP_INSECURE_REGISTRY_HOSTS ?? '').split(',').map(host => host.trim()).filter(Boolean);
+	workspace.configureRemoteModules(
+		{ trusted: true },
+		{
+			env: process.env,
+			credentials: ambientCredentials({ env: process.env, homeDir: os.homedir() }),
+			approveHost: async () => true,
+			allowedHosts: insecureHosts,
+			registry: createRegistryResolver({ allowInsecureHosts: insecureHosts })
+		}
+	);
+	return workspace;
+}
+
 async function inspectDocument(argv: string[]): Promise<number> {
 	let workingDir = process.cwd();
 	let configName = 'terragrunt.hcl';
@@ -326,28 +368,9 @@ async function inspectDocument(argv: string[]): Promise<number> {
 	const realConfig = await fs.realpath(configPath);
 	const relative = path.relative(root, realConfig);
 	if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`Inspect configuration is outside the working directory: ${configPath}`);
-	if (!workspaceRoot) {
-		workspaceRoot = root;
-		for (let current = root; ; current = path.dirname(current)) {
-			if (fsSync.existsSync(path.join(current, '.git'))) { workspaceRoot = current; break; }
-			if (path.dirname(current) === current) break;
-		}
-	}
-
 	const uri = pathToFileURL(realConfig).toString();
-	const workspace = new Workspace();
-	workspace.setWorkspaceRoot(pathToFileURL(workspaceRoot).toString());
-	const insecureHosts = (process.env.TGHCLP_INSECURE_REGISTRY_HOSTS ?? '').split(',').map(host => host.trim()).filter(Boolean);
-	workspace.configureRemoteModules(
-		{ trusted: true },
-		{
-			env: process.env,
-			credentials: ambientCredentials({ env: process.env, homeDir: os.homedir() }),
-			approveHost: async () => true,
-			allowedHosts: insecureHosts,
-			registry: createRegistryResolver({ allowInsecureHosts: insecureHosts })
-		}
-	);
+	workspaceRoot ??= enclosingWorkspaceRoot(root);
+	const workspace = moduleWorkspace(workspaceRoot);
 	const document = new ParsedDocument(workspace, uri, await fs.readFile(realConfig, 'utf8'));
 	let workspaceError: string | undefined;
 	// Where the expression that caused the error is, when the workspace can say.
@@ -597,7 +620,7 @@ function discoveryUsage(command: string): string {
  * than to look.
  */
 export function parseArgs(argv: string[]): CLIOptions | 'help' {
-	const options: CLIOptions = { json: false, showConfigPath: false, experiments: [], workingDir: process.cwd(), paths: [], noHidden: false, dependencies: false, dag: false, offline: false };
+	const options: CLIOptions = { json: false, showConfigPath: false, experiments: [], workingDir: process.cwd(), paths: [], noHidden: false, dependencies: false, dag: false, offline: false, inputs: false, strict: false };
 	for (let index = 0; index < argv.length; index++) {
 		const argument = argv[index];
 		if (argument.startsWith('--format=')) {
@@ -622,6 +645,8 @@ export function parseArgs(argv: string[]): CLIOptions | 'help' {
 			case '--dependencies': options.dependencies = true; break;
 			case '--dag': options.dag = true; break;
 			case '--offline': options.offline = true; break;
+			case '--inputs': options.inputs = true; break;
+			case '--strict': options.strict = true; break;
 			case '--format': {
 				const value = argv[++index] as CLIOptions['format'];
 				if (!value || !['text', 'json', 'tree', 'dot'].includes(value)) throw new Error(`Unsupported format ${value ?? ''}`);
@@ -2219,7 +2244,8 @@ async function executeTerraformCommand(argv: string[]): Promise<number> {
 	if (await pathExists(stackPath)) await stackGenerate(['--working-dir', options.workingDir]);
 	const configFiles = (await collectFiles(executionWorkingDir)).filter(file => path.basename(file) === 'terragrunt.hcl' || path.basename(file) === 'terragrunt.hcl.json');
 	if (configFiles.length === 0) throw new Error(`No Terragrunt HCL files found under ${executionWorkingDir}`);
-	const diagnostics = (await Promise.all(configFiles.map(file => validateFile(file, executionWorkingDir, [], options.command, false, false)))).flat();
+	const diagnostics = (await Promise.all(configFiles.map(file => validateFile(file, executionWorkingDir, [], options.command, false, false))))
+		.flat().filter(item => item.severity === 'error');
 	if (diagnostics.length > 0) {
 		for (const item of diagnostics) process.stderr.write(`${item.range.filename}: ${item.summary}: ${item.detail}\n`);
 		return 1;
@@ -2323,14 +2349,15 @@ function offsetAt(content: string, line: number, character: number): number {
 	return offset + Buffer.byteLength((lines[line] ?? '').slice(0, character), 'utf8');
 }
 
-function diagnostic(filename: string, content: string, item: any): DiagnosticOutput {
+function diagnostic(filename: string, content: string, item: any, severity: DiagnosticOutput['severity'] = 'error'): DiagnosticOutput {
 	const start = item.range?.start ?? { line: 0, character: 0 };
 	const end = item.range?.end ?? start;
 	const summary = item.message.startsWith('Unknown block') ? 'Unsupported block type' :
 		item.message.startsWith('Unknown function') ? 'Call to unknown function' :
 		item.message.startsWith('Unknown attribute') ? 'Unsupported attribute' :
 		item.message.startsWith('Inline function') ? 'Invalid inline function' :
-		(item.message.startsWith('Missing required argument') || item.message.startsWith('Missing required attribute')) ? 'Missing required argument' : 'HCL validation error';
+		(item.message.startsWith('Missing required argument') || item.message.startsWith('Missing required attribute')) ? 'Missing required argument' :
+		severity === 'warning' ? 'HCL validation warning' : 'HCL validation error';
 	return {
 		range: {
 			filename,
@@ -2339,7 +2366,7 @@ function diagnostic(filename: string, content: string, item: any): DiagnosticOut
 		},
 		summary,
 		detail: item.message,
-		severity: 'error'
+		severity
 	};
 }
 
@@ -2363,6 +2390,39 @@ async function inheritedInlineFunctions(
 	}
 }
 
+/** A configuration added to a workspace that loads modules, for `hcl validate --inputs`. */
+interface LoadedConfig {
+	/** The document the workspace holds for the file. */
+	document: ParsedDocument;
+	/** Why the workspace could not add the file, when it could not. */
+	error?: string;
+}
+
+/**
+ * Adds every configuration to one workspace that loads the modules they source, and waits for remote modules to
+ * be fetched, so each document's diagnostics include its module inputs.
+ *
+ * @param files the configurations being validated.
+ * @param workingDir the directory validation runs from; the workspace is rooted at its git checkout.
+ * @returns each HCL file's loaded configuration, by path.
+ */
+async function loadConfigs(files: string[], workingDir: string): Promise<Map<string, LoadedConfig>> {
+	const workspace = moduleWorkspace(enclosingWorkspaceRoot(workingDir));
+	const loaded = new Map<string, LoadedConfig>();
+	for (const file of files.filter(candidate => !candidate.endsWith('.json'))) {
+		const document = new ParsedDocument(workspace, pathToFileURL(file).toString(), await fs.readFile(file, 'utf8'));
+		const config: LoadedConfig = { document };
+		loaded.set(file, config);
+		try {
+			await workspace.addDocument(document);
+		} catch (error) {
+			config.error = error instanceof Error ? error.message : String(error);
+		}
+	}
+	await workspace.remoteModulesSettled();
+	return loaded;
+}
+
 /**
  * `terraformCommand` is required rather than defaulted.
  *
@@ -2382,7 +2442,10 @@ async function inheritedInlineFunctions(
  * @param readEncryptedSops validate a sops file that cannot be decrypted as
  *   written, reporting nothing for what is computed from its secrets. Only
  *   `hcl validate --offline` sets it; Terragrunt fails on such a file.
- * @returns the problems found, empty when the configuration is valid.
+ * @param loaded the file as added to a workspace that loads modules, so its
+ *   inputs are checked against the module it sources. Without it the file is
+ *   checked on its own.
+ * @returns the problems found, errors and warnings, empty when there are none.
  */
 async function validateFile(
 	filePath: string,
@@ -2390,7 +2453,8 @@ async function validateFile(
 	experiments: string[],
 	terraformCommand: string,
 	skipOutputs: boolean,
-	readEncryptedSops: boolean
+	readEncryptedSops: boolean,
+	loaded?: LoadedConfig
 ): Promise<DiagnosticOutput[]> {
 	const content = await fs.readFile(filePath, 'utf8');
 	if (filePath.endsWith('.json')) {
@@ -2402,21 +2466,24 @@ async function validateFile(
 			}];
 		}
 	}
-	const document = new ParsedDocument(new Workspace(), pathToFileURL(filePath).toString(), content);
+	const document = loaded?.document ?? new ParsedDocument(new Workspace(), pathToFileURL(filePath).toString(), content);
 	// Inline functions are inherited through includes, so a call to a function
 	// declared in an included configuration is only resolvable once those
 	// configurations have been read.
 	if (document.hasIncludes()) {
 		document.setInheritedInlineFunctions(await inheritedInlineFunctions(filePath, content, workDir));
 	}
-	// Only errors fail validation. A warning, such as a backend key the schema
-	// does not list, is the editor's advice: Terragrunt's hcl validate does not
-	// check it.
-	const diagnostics = document.getDiagnostics()
-		.filter(item => item.severity === DiagnosticSeverity.Error)
-		.map(item => diagnostic(filePath, content, item));
-	if (diagnostics.length > 0) return diagnostics;
-	if (path.basename(filePath) === 'terragrunt.values.hcl') return [];
+	const found = document.getDiagnostics().flatMap(item =>
+		item.severity === DiagnosticSeverity.Error ? [diagnostic(filePath, content, item)] :
+		item.severity === DiagnosticSeverity.Warning ? [diagnostic(filePath, content, item, 'warning')] : []);
+	if (found.some(item => item.severity === 'error')) return found;
+	const notChecked: DiagnosticOutput[] = loaded?.error === undefined ? [] : [{
+		range: { filename: filePath, start: { line: 1, column: 1, byte: 0 }, end: { line: 1, column: 1, byte: 0 } },
+		summary: 'HCL validation warning',
+		detail: `Module inputs are not checked: ${loaded.error}`,
+		severity: 'warning'
+	}];
+	if (path.basename(filePath) === 'terragrunt.values.hcl') return found;
 	// Validation evaluates the unit. Terragrunt's `hcl validate` does so without
 	// running `output` in any dependency: their outputs are the mocks validate
 	// may see, or unknown. The run path's pre-flight reads them, since running
@@ -2426,8 +2493,8 @@ async function validateFile(
 	// Without outputs, a value that needs a dependency's is unresolved, as is
 	// one computed from a secret read as written: neither is a fault in the
 	// configuration.
-	if (result.valid || (skipOutputs && result.unresolved)) return [];
-	return [{
+	if (result.valid || (skipOutputs && result.unresolved)) return [...found, ...notChecked];
+	return [...found, {
 		range: { filename: filePath, start: { line: 1, column: 1, byte: 0 }, end: { line: 1, column: 1, byte: 0 } },
 		summary: 'HCL validation error',
 		detail: result.error ?? 'Configuration evaluation failed',
@@ -2613,10 +2680,13 @@ async function main(argv: string[]): Promise<number> {
 	const roots = parsed.paths.length > 0 ? parsed.paths.map(target => path.resolve(parsed.workingDir, target)) : [parsed.workingDir];
 	const files = (await Promise.all(roots.map(collectFiles))).flat().sort();
 	if (files.length === 0) throw new Error(`No Terragrunt HCL files found under ${parsed.workingDir}`);
-	const diagnostics = (await Promise.all(files.map(file => validateFile(file, parsed.workingDir, parsed.experiments, 'validate', true, parsed.offline)))).flat();
+	const loaded = parsed.inputs ? await loadConfigs(files, parsed.workingDir) : undefined;
+	const diagnostics = (await Promise.all(files.map(file =>
+		validateFile(file, parsed.workingDir, parsed.experiments, 'validate', true, parsed.offline, loaded?.get(file))))).flat();
+	const failures = diagnostics.filter(item => item.severity === 'error' || parsed.strict);
 	if (parsed.showConfigPath) {
-		if (diagnostics.length > 0) {
-			const paths = [...new Set(diagnostics.map(item => item.range.filename))];
+		if (failures.length > 0) {
+			const paths = [...new Set(failures.map(item => item.range.filename))];
 			if (parsed.json) process.stdout.write(`${JSON.stringify(paths)}\n`);
 			else for (const file of paths) process.stdout.write(`${file}\n`);
 		}
@@ -2625,7 +2695,7 @@ async function main(argv: string[]): Promise<number> {
 	} else if (diagnostics.length > 0) {
 		for (const item of diagnostics) process.stderr.write(`${item.range.filename}: ${item.summary}: ${item.detail}\n`);
 	}
-	return diagnostics.length === 0 ? 0 : 1;
+	return failures.length === 0 ? 0 : 1;
 }
 
 /**
