@@ -66,6 +66,30 @@ generate "provider" {
 			});
 		});
 
+		it('fails a format that needs more arguments than it is given, or is given more than it uses', async () => {
+			const failures: Array<[string, string]> = [
+				['format("%s")', 'not enough arguments for "%s" at 0: need index 1 but have 0 total'],
+				['format("%s %s", "x")', 'not enough arguments for "%s" at 3: need index 2 but have 1 total'],
+				['format("%[3]s", "a", "b")', 'not enough arguments for "%[3]s" at 0: need index 3 but have 2 total'],
+				['format("plain", 1)', 'too many arguments; no verbs in format string'],
+				['format("%s", "a", "b")', 'too many arguments; only 1 used by format string'],
+				['formatlist("%s")', 'not enough arguments for "%s" at 0: need index 1 but have 0 total'],
+				['formatlist("%s-%s", ["x"])', 'error on format iteration 0: not enough arguments for "%s" at 3: need index 2 but have 1 total'],
+				['formatlist("plain", ["x"])', 'error on format iteration 0: too many arguments; no verbs in format string']
+			];
+			for (const [call, message] of failures) {
+				const result = await evaluate(`inputs = { x = ${call} }`);
+				expect(result.valid, call).to.equal(false);
+				expect(result.error, call).to.include(message);
+			}
+		});
+
+		it('takes the argument a verb indexes, and the ones after it in turn', async () => {
+			const result = await evaluate('inputs = {\n  x = format("%[2]s %s %[1]s", "a", "b", "c")\n  y = format("%[2]s", "a", "b")\n  z = format("%%")\n}');
+			expect(result.error).to.equal(undefined);
+			expect(runtimeValueToPlain(result.inputs!)).to.deep.equal({ x: 'b c a', y: 'b', z: '%' });
+		});
+
 		it('requires at least two sets for setproduct', async () => {
 			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', 'inputs = { x = setproduct(["a"]) }'))
 				.to.deep.equal(['Function "setproduct" requires at least 2 arguments']);

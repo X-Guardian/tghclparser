@@ -75,16 +75,19 @@ function sortRuntimeList(items: RuntimeValue<ValueType>[]): RuntimeValue<ValueTy
 	return sorted;
 }
 
-// Go-compatible formatting for a single format string.
+// Go-compatible formatting for a single format string. Arguments are taken as go-cty's formatFSM takes them: each
+// verb uses the next argument, or the one its `[n]` index names, and every argument must be used.
 function goFormat(format: string, args: RuntimeValue<ValueType>[]): string {
 	let output = '';
-	let argumentIndex = 0;
+	let nextArgument = 1;
+	let highestArgument = 0;
 	for (let index = 0; index < format.length;) {
 		if (format[index] !== '%') {
 			output += format[index];
 			index++;
 			continue;
 		}
+		const verbStart = index;
 		index++;
 		if (format[index] === '%') {
 			output += '%';
@@ -107,10 +110,23 @@ function goFormat(format: string, args: RuntimeValue<ValueType>[]): string {
 			while (index < format.length && /[0-9]/u.test(format[index])) index++;
 			if (index > precisionStart) precision = parseInt(format.slice(precisionStart, index), 10);
 		}
+		let argumentNumber = nextArgument;
+		if (format[index] === '[') {
+			const close = format.indexOf(']', index);
+			const explicit = format.slice(index + 1, close);
+			if (close === -1 || !/^[1-9][0-9]*$/u.test(explicit)) throw new Error(`invalid format string starting at offset ${index}`);
+			argumentNumber = Number(explicit);
+			index = close + 1;
+		}
 		const verb = format[index];
 		index++;
-		const argument = args[argumentIndex];
-		argumentIndex++;
+		const raw = format.slice(verbStart, index);
+		if (argumentNumber > args.length) {
+			throw new Error(`not enough arguments for "${raw}" at ${verbStart}: need index ${argumentNumber} but have ${args.length} total`);
+		}
+		highestArgument = Math.max(highestArgument, argumentNumber);
+		nextArgument = argumentNumber + 1;
+		const argument = args[argumentNumber - 1];
 		let rendered: string;
 		switch (verb) {
 			case 's':
@@ -131,6 +147,11 @@ function goFormat(format: string, args: RuntimeValue<ValueType>[]): string {
 		}
 		if (!zeroPad && width > 0 && rendered.length < width) rendered = rendered.padStart(width, ' ');
 		output += rendered;
+	}
+	if (highestArgument < args.length) {
+		throw new Error(highestArgument === 0
+			? 'too many arguments; no verbs in format string'
+			: `too many arguments; only ${highestArgument} used by format string`);
 	}
 	return output;
 }
@@ -454,7 +475,11 @@ export const builtinFunctionGroup = {
 			const results: RuntimeValue<ValueType>[] = [];
 			for (let index = 0; index < maxLength; index++) {
 				const rowArgs = lists.map(list => list[list.length === 1 ? 0 : index]);
-				results.push(stringValue(goFormat(format, rowArgs)));
+				try {
+					results.push(stringValue(goFormat(format, rowArgs)));
+				} catch (error) {
+					throw new Error(`error on format iteration ${index}: ${error instanceof Error ? error.message : String(error)}`);
+				}
 			}
 			return arrayValue(results);
 		},
