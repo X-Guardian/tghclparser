@@ -1228,7 +1228,9 @@ export class ConfigEvaluator {
 			// Terragrunt functions report the unit currently being rendered.
 			terragruntDir: scope.unitDir ?? scope.dir,
 			originalTerragruntDir: scope.unitDir ?? scope.dir,
-			includeDir: scope.includes.size > 0 ? [...scope.includes.values()][0].dir : undefined,
+			includeDir: scope.unitDir !== undefined && scope.unitDir !== scope.dir
+				? scope.dir
+				: scope.includes.size > 0 ? [...scope.includes.values()][0].dir : scope.dir,
 			repoRoot,
 			readTerragruntConfig: async (relativePath: string) => {
 				this.assertTrusted('read_terragrunt_config');
