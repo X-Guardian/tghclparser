@@ -1228,9 +1228,12 @@ export class ConfigEvaluator {
 			// Terragrunt functions report the unit currently being rendered.
 			terragruntDir: scope.unitDir ?? scope.dir,
 			originalTerragruntDir: scope.unitDir ?? scope.dir,
-			includeDir: scope.unitDir !== undefined && scope.unitDir !== scope.dir
-				? scope.dir
-				: scope.includes.size > 0 ? [...scope.includes.values()][0].dir : scope.dir,
+			// A file other than the unit's own is one the unit includes, and Terragrunt's include functions in it answer
+			// about it.
+			includes: {
+				original: scope.unit !== undefined && path.resolve(scope.filePath) !== scope.unit.unitPath ? scope.dir : undefined,
+				named: new Map([...scope.includes].map(([name, include]) => [name, include.dir]))
+			},
 			repoRoot,
 			readTerragruntConfig: async (relativePath: string) => {
 				this.assertTrusted('read_terragrunt_config');
