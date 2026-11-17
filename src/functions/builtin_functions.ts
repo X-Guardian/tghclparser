@@ -3,6 +3,7 @@ import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
 
+import { graphemeClusters } from '../grapheme-clusters';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
 import { expandTerragruntGlob } from './terragrunt_glob';
 import {
@@ -643,12 +644,12 @@ export const builtinFunctionGroup = {
 		strcontains: async (args: RuntimeValue<ValueType>[]) => booleanValue(stringArgument(args, 0, 'strcontains').includes(stringArgument(args, 1, 'strcontains'))),
 		strrev: async (args: RuntimeValue<ValueType>[]) => stringValue([...stringArgument(args, 0, 'strrev')].reverse().join('')),
 		substr: async (args: RuntimeValue<ValueType>[]) => {
-			const value = stringArgument(args, 0, 'substr');
-			let offset = numberArgument(args, 1, 'substr');
+			const clusters = graphemeClusters(stringArgument(args, 0, 'substr'));
+			const offset = numberArgument(args, 1, 'substr');
 			const length = numberArgument(args, 2, 'substr');
-			if (offset < 0) offset = value.length + offset;
-			if (offset < 0 || offset > value.length) throw new Error('substr offset out of range');
-			return stringValue(value.slice(offset, offset + length));
+			if (offset >= 0 && length === 0) return stringValue('');
+			const rest = clusters.slice(Math.max(offset < 0 ? offset + clusters.length : offset, 0));
+			return stringValue((length > 0 ? rest.slice(0, length) : rest).join(''));
 		},
 		sum: async (args: RuntimeValue<ValueType>[]) => numberValue(arrayArgument(args, 0, 'sum').reduce((total, value, index) => {
 			if (value.type !== 'number') throw new Error(`sum list element ${index + 1} must be a number`);
