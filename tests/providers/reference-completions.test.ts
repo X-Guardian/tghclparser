@@ -266,6 +266,26 @@ inputs = {
 			expect(await complete(previous, '{for k, c in local.containers : k => k.<|>}')).to.deep.equal([]);
 		});
 
+		it('details each key by the element HCL visits first, the one under the lexically first key of an object', async () => {
+			const zones = (body: string) => `locals {
+  zones = {
+    b = { name = "second" }
+    a = { name = "first" }
+  }
+}
+
+inputs = {
+  x = [for z in local.zones : ${body}]
+}`;
+			const previous = await openUnit(zones('z.name'));
+			const evaluator = new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true });
+			previous.setEvaluatedSpans(await evaluator.evaluatedSpans(URI.parse(previous.getUri()).fsPath, previous.getContent(), directory));
+			const { text, position } = cursorIn(zones('z.<|>'));
+			const items = await new ParsedDocument(workspace, previous.getUri(), text, previous).getCompletionsAtPosition(position);
+
+			expect(items.map(item => [item.label, item.detail])).to.deep.equal([['name', '"first"']]);
+		});
+
 		it('finds the variable in an enclosing for expression, and the innermost one that declares the name', async () => {
 			const outer = await evaluatedUnit('[for c in values(local.containers) : [for s in local.sizes : "${c.provider}-${s.name}"]]');
 			expect(labels(await complete(outer, '[for c in values(local.containers) : [for s in local.sizes : "${c.<|>}-${s.name}"]]'))).to.deep.equal(['provider', 'region', 'network', 'priority']);

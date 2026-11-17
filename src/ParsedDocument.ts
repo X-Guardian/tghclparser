@@ -27,7 +27,7 @@ import type { Workspace } from './Workspace';
 /** A `for` expression as last evaluated: the name it binds each element's value to, and the elements. */
 interface EvaluatedForExpression {
 	variable: string;
-	/** The elements of its collection: the items of a list, or the values of an object. */
+	/** The elements of its collection: the items of a list, or the values of an object by key in lexical order. */
 	elements: RuntimeValue<ValueType>[];
 }
 
@@ -390,10 +390,12 @@ export class ParsedDocument {
 				const variables = children[1]?.type === 'identifier' ? children.slice(0, 2) : children.slice(0, 1);
 				const collection = children[variables.length]?.location;
 				const value = collection && expressions.get(`${collection.start.offset}:${collection.end.offset}`);
+				// The elements in the order HCL visits them: an object's by key in lexical order.
+				const map = value?.type === 'object' || value?.type === 'block' ? value.value as Map<string, RuntimeValue<ValueType>> : undefined;
 				const elements = value?.type === 'array'
 					? value.value as RuntimeValue<ValueType>[]
-					: value?.type === 'object' || value?.type === 'block'
-						? [...(value.value as Map<string, RuntimeValue<ValueType>>).values()]
+					: map
+						? [...map.keys()].sort().map(key => map.get(key)!)
 						: undefined;
 				if (elements) forExpressions.set(node.location.start.offset, { variable: String(variables.at(-1)?.value ?? ''), elements });
 			}
