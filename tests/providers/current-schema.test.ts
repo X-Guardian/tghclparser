@@ -244,6 +244,36 @@ describe('object value key diagnostics', () => {
 		expect(messages).to.include('Unknown key "pth" in remote_state.generate');
 	});
 
+	it('accepts the keys Terraform takes that OpenTofu does not, and the oci backend', () => {
+		const backends: Record<string, string> = {
+			s3: 'bucket = "state"\n    assume_role = { role_arn = "arn", source_identity = "me" }\n    endpoints = { sso = "https://sso" }',
+			azurerm: 'storage_account_name = "a"\n    lookup_blob_endpoint = true\n    ado_pipeline_service_connection_id = "c"',
+			cos: 'bucket = "b"\n    endpoint = "https://cos"\n    domain = "d"\n    shared_credentials_dir = "~/.tccli"\n    profile = "p"\n    cam_role_name = "r"',
+			kubernetes: 'secret_suffix = "s"\n    proxy_url = "http://proxy"',
+			oss: 'bucket = "b"\n    tablestore_instance_name = "i"',
+			oci: 'bucket = "b"\n    namespace = "n"\n    auth = "InstancePrincipal"\n    config_file_profile = "p"\n    sse_customer_key_sha256 = "h"'
+		};
+		for (const [backend, keys] of Object.entries(backends)) {
+			expect(diagnosticsFor(unit, `remote_state {\n  backend = "${backend}"\n  config = {\n    ${keys}\n  }\n}`), backend).to.deep.equal([]);
+		}
+		expect(diagnosticsFor(unit, 'remote_state {\n  backend = "oci"\n  config = {\n    namespce = "n"\n  }\n}'))
+			.to.deep.equal(['Unknown key "namespce" in remote_state.config for backend "oci"']);
+	});
+
+	it('reports a key that is a block in the backend, which Terragrunt cannot write', () => {
+		const backends: Record<string, string> = {
+			cos: 'assume_role = { role_arn = "r" }',
+			oss: 'assume_role = { role_arn = "r" }',
+			kubernetes: 'exec = { command = "c" }',
+			remote: 'workspaces = { name = "w" }'
+		};
+		for (const [backend, keys] of Object.entries(backends)) {
+			const key = keys.split(' ')[0];
+			expect(diagnosticsFor(unit, `remote_state {\n  backend = "${backend}"\n  config = {\n    ${keys}\n  }\n}`), backend)
+				.to.deep.equal([`Unknown key "${key}" in remote_state.config for backend "${backend}"`]);
+		}
+	});
+
 	it('reports a key of another backend', () => {
 		expect(diagnosticsFor(unit, 'remote_state {\n  backend = "gcs"\n  config = {\n    dynamodb_table = "locks"\n  }\n}'))
 			.to.deep.equal(['Unknown key "dynamodb_table" in remote_state.config for backend "gcs"']);

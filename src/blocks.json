@@ -82,7 +82,8 @@
               { "name": "s3", "description": "A custom endpoint for the S3 API.", "required": false, "types": ["string"] },
               { "name": "iam", "description": "A custom endpoint for the IAM API.", "required": false, "types": ["string"] },
               { "name": "sts", "description": "A custom endpoint for the STS API.", "required": false, "types": ["string"] },
-              { "name": "dynamodb", "description": "A custom endpoint for the DynamoDB API.", "required": false, "types": ["string"] }
+              { "name": "dynamodb", "description": "A custom endpoint for the DynamoDB API.", "required": false, "types": ["string"] },
+              { "name": "sso", "description": "A custom endpoint for the IAM Identity Center (formerly SSO) API. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] }
             ] },
             { "name": "dynamodb_endpoint", "description": "A custom endpoint for the DynamoDB API.", "required": false, "types": ["string"], "deprecated": true, "deprecationMessage": "Use `endpoints.dynamodb` instead." },
             { "name": "endpoint", "description": "A custom endpoint for the S3 API.", "required": false, "types": ["string"], "deprecated": true, "deprecationMessage": "Use `endpoints.s3` instead." },
@@ -131,7 +132,8 @@
               { "name": "policy_arns", "description": "Amazon Resource Names (ARNs) of IAM Policies describing further restricting permissions for the IAM Role being assumed.", "required": false, "types": ["array"] },
               { "name": "session_name", "description": "The session name to use when assuming the role.", "required": false, "types": ["string"] },
               { "name": "tags", "description": "Assume role session tags.", "required": false, "types": ["object"] },
-              { "name": "transitive_tag_keys", "description": "Assume role session tag keys to pass to any subsequent sessions.", "required": false, "types": ["array"] }
+              { "name": "transitive_tag_keys", "description": "Assume role session tag keys to pass to any subsequent sessions.", "required": false, "types": ["array"] },
+              { "name": "source_identity", "description": "Source identity specified by the principal assuming the role. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] }
             ] },
             { "name": "assume_role_with_web_identity", "description": "A role to assume with a web identity token before accessing the state.", "required": false, "types": ["object"], "attributes": [
               { "name": "role_arn", "description": "The Amazon Resource Name (ARN) role to assume.", "required": false, "types": ["string"] },
@@ -224,6 +226,8 @@
             { "name": "oidc_request_url", "description": "The URL of the OIDC provider from which to request an ID token.", "required": false, "types": ["string"] },
             { "name": "oidc_request_token", "description": "The bearer token to use for the request to the OIDC providers `oidc_request_url` URL to fetch an ID token.", "required": false, "types": ["string"] },
             { "name": "ado_service_connection_id", "description": "The Azure DevOps Service Connection ID to use when authenticating with Azure DevOps.", "required": false, "types": ["string"] },
+            { "name": "ado_pipeline_service_connection_id", "description": "The Azure DevOps Pipeline Service Connection ID. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "lookup_blob_endpoint", "description": "Whether to look up the storage account blob endpoint, needed when the storage account uses the Azure DNS zone endpoint. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["boolean"] },
             { "name": "use_aks_workload_identity", "description": "Set to true to if you want to use Azure's AKS Workload Identity to authenticate to Azure.", "required": false, "types": ["boolean"] },
             { "name": "use_azuread_auth", "description": "Should OpenTofu use AzureAD Authentication to access the Blob?", "required": false, "types": ["boolean"] },
             { "name": "use_cli", "description": "Set to true if you want to use the Azure CLI to authenticate to Azure.", "required": false, "types": ["boolean"] },
@@ -271,12 +275,11 @@
             { "name": "encrypt", "description": "Whether to enable server side encryption of the state file.", "required": false, "types": ["boolean"] },
             { "name": "acl", "description": "Object ACL to be applied to the state file.", "required": false, "types": ["string"] },
             { "name": "accelerate", "description": "Whether to enable global Acceleration.", "required": false, "types": ["boolean"] },
-            { "name": "assume_role", "description": "A role to assume before accessing the state.", "required": false, "types": ["object"], "attributes": [
-              { "name": "role_arn", "description": "The ARN of the role to assume.", "required": true, "types": ["string"] },
-              { "name": "session_name", "description": "The session name to use when making the AssumeRole call.", "required": true, "types": ["string"] },
-              { "name": "session_duration", "description": "The duration of the session when making the AssumeRole call.", "required": true, "types": ["number"] },
-              { "name": "policy", "description": "A more restrictive policy when making the AssumeRole call.", "required": false, "types": ["string"] }
-            ] }
+            { "name": "endpoint", "description": "The custom endpoint for the COS API, such as http://cos-internal.{Region}.tencentcos.cn. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "domain", "description": "The root domain of the API request, defaulting to tencentcloudapi.com. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "shared_credentials_dir", "description": "The directory of the shared credentials, defaulting to ~/.tccli. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "profile", "description": "The profile name as set in the shared credentials. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "cam_role_name", "description": "The name of the CVM instance CAM role. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] }
           ],
           "http": [
             { "name": "address", "description": "The address of the REST endpoint.", "required": true, "types": ["string"] },
@@ -315,12 +318,7 @@
             { "name": "config_context_auth_info", "description": "", "required": false, "types": ["string"] },
             { "name": "config_context_cluster", "description": "", "required": false, "types": ["string"] },
             { "name": "token", "description": "Token to authenticate a service account.", "required": false, "types": ["string"] },
-            { "name": "exec", "description": "Use a credential plugin to authenticate.", "required": false, "types": ["object"], "attributes": [
-              { "name": "api_version", "description": "", "required": true, "types": ["string"] },
-              { "name": "command", "description": "", "required": true, "types": ["string"] },
-              { "name": "env", "description": "", "required": false, "types": ["object"] },
-              { "name": "args", "description": "", "required": false, "types": ["array"] }
-            ] }
+            { "name": "proxy_url", "description": "URL to the proxy to be used for all API requests. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] }
           ],
           "local": [
             { "name": "path", "description": "", "required": false, "types": ["string"] },
@@ -339,16 +337,11 @@
             { "name": "prefix", "description": "The directory where state files will be saved inside the bucket.", "required": false, "types": ["string"] },
             { "name": "key", "description": "The path of the state file inside the bucket.", "required": false, "types": ["string"] },
             { "name": "tablestore_table", "description": "TableStore table for state locking and consistency.", "required": false, "types": ["string"] },
+            { "name": "tablestore_instance_name", "description": "The instance name of the TableStore table. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
             { "name": "encrypt", "description": "Whether to enable server side encryption of the state file.", "required": false, "types": ["boolean"] },
             { "name": "acl", "description": "Object ACL to be applied to the state file.", "required": false, "types": ["string"] },
             { "name": "shared_credentials_file", "description": "This is the path to the shared credentials file.", "required": false, "types": ["string"] },
             { "name": "profile", "description": "This is the Alibaba Cloud profile name as set in the shared credentials file.", "required": false, "types": ["string"] },
-            { "name": "assume_role", "description": "A RAM role to assume before accessing the state.", "required": false, "types": ["object"], "attributes": [
-              { "name": "role_arn", "description": "The ARN of a RAM role to assume prior to making API calls.", "required": true, "types": ["string"] },
-              { "name": "session_name", "description": "The session name to use when assuming the role.", "required": false, "types": ["string"] },
-              { "name": "policy", "description": "The permissions applied when assuming a role.", "required": false, "types": ["string"] },
-              { "name": "session_expiration", "description": "The time after which the established session for assuming role expires.", "required": false, "types": ["number"] }
-            ] },
             { "name": "assume_role_role_arn", "description": "The ARN of a RAM role to assume prior to making API calls.", "required": false, "types": ["string"] },
             { "name": "assume_role_session_name", "description": "The session name to use when assuming the role.", "required": false, "types": ["string"] },
             { "name": "assume_role_policy", "description": "The permissions applied when assuming a role.", "required": false, "types": ["string"] },
@@ -366,11 +359,26 @@
           "remote": [
             { "name": "hostname", "description": "The remote backend hostname to connect to.", "required": false, "types": ["string"] },
             { "name": "organization", "description": "The name of the organization containing the targeted workspace(s).", "required": true, "types": ["string"] },
-            { "name": "token", "description": "The token used to authenticate with the remote backend.", "required": false, "types": ["string"] },
-            { "name": "workspaces", "description": "The remote workspace or workspaces to use, by exactly one of name or prefix.", "required": false, "types": ["object"], "attributes": [
-              { "name": "name", "description": "A workspace name used to map the default workspace to a named remote workspace.", "required": false, "types": ["string"] },
-              { "name": "prefix", "description": "A prefix used to filter workspaces using a single configuration.", "required": false, "types": ["string"] }
-            ] }
+            { "name": "token", "description": "The token used to authenticate with the remote backend.", "required": false, "types": ["string"] }
+          ],
+          "oci": [
+            { "name": "bucket", "description": "The name of the OCI Object Storage bucket. Accepted by Terraform, not OpenTofu.", "required": true, "types": ["string"] },
+            { "name": "namespace", "description": "The namespace of the OCI Object Storage. Accepted by Terraform, not OpenTofu.", "required": true, "types": ["string"] },
+            { "name": "key", "description": "The name of the state file stored on the remote backend. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "region", "description": "OCI region where the bucket is located. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "tenancy_ocid", "description": "The OCID of the tenancy. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "user_ocid", "description": "The OCID of the user. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "fingerprint", "description": "The fingerprint of the user's API key. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "private_key", "description": "The private key for API authentication. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "private_key_path", "description": "Path to the private key file. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "private_key_password", "description": "Passphrase for the private key, if required. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "auth", "description": "Authentication method: ApiKey, InstancePrincipal, InstancePrincipalWithCerts, SecurityToken, OKEWorkloadIdentity or ResourcePrincipal. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "config_file_profile", "description": "Profile name from the OCI config file. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "workspace_key_prefix", "description": "The prefix applied to the non-default state path inside the bucket. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "kms_key_id", "description": "The OCID of a master encryption key used to call the Key Management service to generate a data encryption key or to encrypt or decrypt a data encryption key. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "sse_customer_key", "description": "The base64-encoded 256-bit encryption key to use to encrypt or decrypt the data. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "sse_customer_key_sha256", "description": "The base64-encoded SHA256 hash of the encryption key, used to check its integrity. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] },
+            { "name": "sse_customer_algorithm", "description": "The encryption algorithm, AES256. Accepted by Terraform, not OpenTofu.", "required": false, "types": ["string"] }
           ]
         } } },
         { "name": "disable_init", "description": "Disables automatic backend initialization.", "required": false, "types": ["boolean"] },
@@ -380,7 +388,7 @@
           { "name": "if_exists", "description": "What Terragrunt does when the file already exists.", "required": true, "types": ["string"], "validation": { "allowedValues": ["error", "skip", "overwrite", "overwrite_terragrunt"] } }
         ] },
         { "name": "encryption", "description": "OpenTofu state and plan encryption configuration.", "required": false, "types": ["object"], "attributes": [
-          { "name": "key_provider", "description": "The OpenTofu key provider type that encrypts state and plans; the other keys configure it.", "required": true, "types": ["string"], "validation": { "allowedValues": ["pbkdf2", "aws_kms", "gcp_kms", "azure_vault", "openbao", "external", "static"] } },
+          { "name": "key_provider", "description": "The OpenTofu key provider type that encrypts state and plans; the other keys configure it.", "required": true, "types": ["string"], "validation": { "allowedValues": ["pbkdf2", "aws_kms", "gcp_kms", "azure_vault", "openbao", "external"] } },
           { "name": "fallback", "description": "Lets OpenTofu read unencrypted state and plans during a migration, and cannot be combined with enforced = true.", "required": false, "types": ["object"], "attributes": [
             { "name": "method", "description": "The fallback method, which must be unencrypted.", "required": true, "types": ["string"], "validation": { "allowedValues": ["unencrypted"] } }
           ] },
@@ -487,9 +495,6 @@
           ],
           "external": [
             { "name": "command", "description": "The external program and its arguments that supply the keys.", "required": true, "types": ["array"] }
-          ],
-          "static": [
-            { "name": "key", "description": "The hex-encoded encryption key.", "required": true, "types": ["string"] }
           ]
         } } }
       ],

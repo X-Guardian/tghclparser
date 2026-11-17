@@ -305,6 +305,13 @@ describe('object value completions outside inputs', () => {
 		expect(labels).not.to.include('key_provider');
 	});
 
+	it('offers only the key providers OpenTofu registers', async () => {
+		const { text, position } = sourceAtCursor('remote_state {\n  encryption = {\n    key_<|>\n  }\n}\n');
+		const items = await provider.getCompletions(text, position, null, documentFor('file:///repo/terragrunt.hcl', { getInlineFunctions: () => new Map() }));
+		const keyProvider = items.find(item => item.label === 'key_provider');
+		expect(keyProvider?.insertText).to.contain('pbkdf2,aws_kms,gcp_kms,azure_vault,openbao,external|');
+	});
+
 	it('still offers functions after an equals sign inside an object value', async () => {
 		const labels = await labelsAt('remote_state {\n  backend = "s3"\n  config = {\n    region = get_<|>\n  }\n}\n');
 		expect(labels).to.include('get_env');
