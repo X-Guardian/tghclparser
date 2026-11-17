@@ -181,6 +181,14 @@ describe('semantic configuration evaluation', () => {
 			assert.equal(await substr('"", 0, 1'), '');
 		});
 
+		it('rejects an offset or a length that is not a whole number', async () => {
+			for (const [args, parameter] of [['"hello", 1.5, 2', 'offset'], ['"hello", 1, 2.5', 'length'], ['"hello", -0.5, -1', 'offset']]) {
+				const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = substr(${args})\n}\n`, process.cwd());
+				assert.equal(result.valid, false, args);
+				assert.match(result.error ?? '', new RegExp(`substr ${parameter} must be a whole number`), args);
+			}
+		});
+
 		it('counts grapheme clusters', async () => {
 			assert.equal(await substr('"🇬🇧éx", 1, 1'), 'é');
 			assert.equal(await substr('"a👍🏽b", -2, 1'), '👍🏽');

@@ -33,6 +33,13 @@ function numberArgument(args: RuntimeValue<ValueType>[], index: number, name: st
 	return Number(argument.value);
 }
 
+/** A number argument that go-cty converts to an integer, which it refuses unless the number is whole. */
+function wholeNumberArgument(args: RuntimeValue<ValueType>[], index: number, name: string, parameter: string): number {
+	const value = numberArgument(args, index, name);
+	if (!Number.isInteger(value)) throw new Error(`${name} ${parameter} must be a whole number, not ${value}`);
+	return value;
+}
+
 function arrayArgument(args: RuntimeValue<ValueType>[], index: number, name: string): RuntimeValue<ValueType>[] {
 	const argument = requireArgument(args, index, name);
 	if (argument.type !== 'array' || !Array.isArray(argument.value)) throw new Error(`${name} argument ${index + 1} must be a list`);
@@ -645,8 +652,8 @@ export const builtinFunctionGroup = {
 		strrev: async (args: RuntimeValue<ValueType>[]) => stringValue([...stringArgument(args, 0, 'strrev')].reverse().join('')),
 		substr: async (args: RuntimeValue<ValueType>[]) => {
 			const clusters = graphemeClusters(stringArgument(args, 0, 'substr'));
-			const offset = numberArgument(args, 1, 'substr');
-			const length = numberArgument(args, 2, 'substr');
+			const offset = wholeNumberArgument(args, 1, 'substr', 'offset');
+			const length = wholeNumberArgument(args, 2, 'substr', 'length');
 			if (offset >= 0 && length === 0) return stringValue('');
 			const rest = clusters.slice(Math.max(offset < 0 ? offset + clusters.length : offset, 0));
 			return stringValue((length > 0 ? rest.slice(0, length) : rest).join(''));
