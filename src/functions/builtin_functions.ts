@@ -449,6 +449,7 @@ export const builtinFunctionGroup = {
 		formatlist: async (args: RuntimeValue<ValueType>[]) => {
 			const format = stringArgument(args, 0, 'formatlist');
 			const lists = args.slice(1).map((_, index) => arrayArgument(args, index + 1, 'formatlist'));
+			if (lists.length === 0) return arrayValue([stringValue(goFormat(format, []))]);
 			const maxLength = Math.max(0, ...lists.map(list => list.length));
 			const results: RuntimeValue<ValueType>[] = [];
 			for (let index = 0; index < maxLength; index++) {
@@ -602,7 +603,7 @@ export const builtinFunctionGroup = {
 		},
 		setproduct: async (args: RuntimeValue<ValueType>[]) => {
 			const sets = args.map((_, index) => arrayArgument(args, index, 'setproduct'));
-			if (sets.length === 0) return arrayValue([]);
+			if (sets.length < 2) throw new Error('setproduct requires at least two arguments');
 			const combinations: RuntimeValue<ValueType>[][] = [[]];
 			for (const set of sets) {
 				const next: RuntimeValue<ValueType>[][] = [];

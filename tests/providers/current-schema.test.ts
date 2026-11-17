@@ -1,5 +1,6 @@
 import { expect } from 'chai';
 
+import { ConfigEvaluator, runtimeValueToPlain } from '../../src/Evaluator';
 import { ParsedDocument } from '../../src/ParsedDocument';
 import { Schema } from '../../src/Schema';
 import { Workspace } from '../../src/Workspace';
@@ -36,6 +37,41 @@ generate "provider" {
 }`);
 		expect(messages).to.include('Block "include" requires 1 label');
 		expect(messages).to.include('Function "find_in_parent_folders" requires at least 1 argument');
+	});
+
+	describe('variadic arguments', () => {
+		const evaluate = (content: string) => new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true, experiments: ['deep-merge'] })
+			.evaluateUnit('/repo/app/terragrunt.hcl', content, '/repo/app');
+
+		it('accepts functions called with none of their variadic arguments', async () => {
+			const content = [
+				'inputs = {',
+				'  merge       = merge(',
+				'  )',
+				'  deep_merge  = deep_merge()',
+				'  format      = format("plain")',
+				'  formatlist  = formatlist("plain")',
+				'  cidrsubnets = cidrsubnets("10.0.0.0/16")',
+				'}'
+			].join('\n');
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', content)).to.deep.equal([]);
+			const result = await evaluate(content);
+			expect(result.error).to.equal(undefined);
+			expect(runtimeValueToPlain(result.inputs!)).to.deep.equal({
+				merge: {},
+				deep_merge: {},
+				format: 'plain',
+				formatlist: ['plain'],
+				cidrsubnets: []
+			});
+		});
+
+		it('requires at least two sets for setproduct', async () => {
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', 'inputs = { x = setproduct(["a"]) }'))
+				.to.deep.equal(['Function "setproduct" requires at least 2 arguments']);
+			expect((await evaluate('inputs = { x = setproduct(["a"]) }')).error).to.match(/setproduct requires at least two arguments/);
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', 'inputs = { x = setproduct(["a"], [1]) }')).to.deep.equal([]);
+		});
 	});
 
 	it('accepts explicit stacks, component path references, and autoinclude dependencies', () => {
