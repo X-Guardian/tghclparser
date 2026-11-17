@@ -114,6 +114,37 @@ describe('semantic configuration evaluation', () => {
 			assert.equal(result.valid, false);
 			assert.match(result.error ?? '', /Missing attribute "b" on "c"/);
 		});
+
+		it('visits the keys of an object in lexical order, as HCL does', async () => {
+			assert.deepEqual(await forInputs('[for k, v in { b = 1, a = 2, "10" = 3, "9" = 4 } : k]'), ['10', '9', 'a', 'b']);
+			assert.deepEqual(await forInputs('[for v in { b = 1, a = 2 } : v]'), [2, 1]);
+		});
+
+		it('takes a condition that converts to a bool', async () => {
+			assert.deepEqual(await forInputs('[for v in [1, 2] : v if v > 1 ? "true" : "false"]'), [2]);
+		});
+
+		const forError = async (expression: string): Promise<string> => {
+			const result = await evaluator.evaluateUnit(configPath, `inputs = { x = ${expression} }`, process.cwd());
+			assert.equal(result.valid, false);
+			return result.error ?? '';
+		};
+
+		it('rejects a condition that is not a bool', async () => {
+			assert.match(await forError('[for v in [1, 2] : v if v]'), /"if" clause of a for expression must be a bool, got number/);
+			assert.match(await forError('[for v in [1, 2] : v if "yes"]'), /"if" clause of a for expression must be a bool, got string "yes"/);
+			assert.match(await forError('[for v in [1, 2] : v if null]'), /"if" clause of a for expression must not be null/);
+		});
+
+		it('takes a key that converts to a string, and rejects any other', async () => {
+			assert.deepEqual(await forInputs('{for v in [true, 2] : v => v}'), { true: true, '2': 2 });
+			assert.match(await forError('{for v in [{ n = "x" }] : v => v}'), /key of a for expression must be a string, got object/);
+			assert.match(await forError('{for v in [null] : v => 1}'), /key of a for expression must not be null/);
+		});
+
+		it('lets a variable shadow a namespace of the same name', async () => {
+			assert.deepEqual(await forInputs('[for local in [{ provider = "x" }] : local.provider]'), ['x']);
+		});
 	});
 
 	it('places a missing local and a missing attribute where they are written, and reports both', async () => {

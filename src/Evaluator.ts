@@ -1507,6 +1507,14 @@ export class ConfigEvaluator {
 		if (parts.length === 0) throw new Error('Empty reference');
 		const namespace = parts[0];
 
+		// A for expression's variables shadow every name of the scope it is written in, `local` and the rest included.
+		for (let index = scope.comprehension.length - 1; index >= 0; index--) {
+			const frame = scope.comprehension[index];
+			if (!frame.has(namespace)) continue;
+			const value = frame.get(namespace)!;
+			return parts.length === 1 ? value : this.traverse(value, parts.slice(1), namespace);
+		}
+
 		if (namespace === 'local') {
 			if (parts.length < 2) throw new Error('local reference requires a name');
 			const value = await this.resolveLocal(scope, parts[1]);
@@ -1525,13 +1533,6 @@ export class ConfigEvaluator {
 			if (parts.length < 2) throw new Error('dependency reference requires a name');
 			const dependency = await this.dependencyValue(parts[1], scope);
 			return this.traverse(dependency, parts.slice(2), parts[1]);
-		}
-
-		for (let index = scope.comprehension.length - 1; index >= 0; index--) {
-			const frame = scope.comprehension[index];
-			if (!frame.has(namespace)) continue;
-			const value = frame.get(namespace)!;
-			return parts.length === 1 ? value : this.traverse(value, parts.slice(1), namespace);
 		}
 
 		throw new Error(`Undefined reference "${parts.join('.')}"`);
@@ -2041,7 +2042,7 @@ export class ConfigEvaluator {
 		const map = new Map<string, RuntimeValue<ValueType>>();
 		const groups = new Map<string, RuntimeValue<ValueType>[]>();
 		await this.forEachComprehensionElement(node, 2, scope, async ([keyNode, valueNode]) => {
-			const key = coerceToString(await this.evalNode(keyNode, scope));
+			const key = comprehensionKey(await this.evalNode(keyNode, scope));
 			const value = await this.evalNode(valueNode, scope);
 			if (grouping) {
 				const group = groups.get(key) ?? [];
@@ -2090,7 +2091,7 @@ export class ConfigEvaluator {
 			frame.set(String(variables[variables.length - 1].value ?? ''), item);
 			scope.comprehension.push(frame);
 			try {
-				if (condition && !coerceToBool(await this.evalNode(condition, scope))) continue;
+				if (condition && !comprehensionCondition(await this.evalNode(condition, scope))) continue;
 				await each(body);
 			} finally {
 				scope.comprehension.pop();
@@ -2455,16 +2456,45 @@ function makeRootScope(filePath: string, content: string, workspaceRoot = path.d
 	};
 }
 
+/**
+ * The elements of a for expression's collection, in the order HCL visits them: a list by index, an object by key in
+ * lexical order, as `keys` and `values` give them.
+ */
 function iterateValue(value: RuntimeValue<ValueType>): Array<[string, RuntimeValue<ValueType>]> {
 	const items: Array<[string, RuntimeValue<ValueType>]> = [];
 	if (value.type === 'array') {
 		(value.value as RuntimeValue<ValueType>[]).forEach((item, index) => items.push([String(index), item]));
 	} else if (value.type === 'object' || value.type === 'block') {
-		for (const [key, item] of (value.value as Map<string, RuntimeValue<ValueType>>).entries()) items.push([key, item]);
+		const map = value.value as Map<string, RuntimeValue<ValueType>>;
+		for (const key of [...map.keys()].sort()) items.push([key, map.get(key)!]);
 	} else {
 		throw new Error(`Comprehension collection must be a list or object, got ${value.type}`);
 	}
 	return items;
+}
+
+/**
+ * Whether a for expression keeps an element, from its `if` clause: a bool, or a string HCL converts to one.
+ *
+ * @throws Error when the clause is null or does not convert to a bool, as HCL refuses it.
+ */
+function comprehensionCondition(value: RuntimeValue<ValueType>): boolean {
+	if (value.type === 'boolean') return Boolean(value.value);
+	if (value.type === 'null') throw new Error('The "if" clause of a for expression must not be null');
+	if (value.type === 'string' && (value.value === 'true' || value.value === 'false')) return value.value === 'true';
+	const shown = value.type === 'string' ? ` ${JSON.stringify(value.value)}` : '';
+	throw new Error(`The "if" clause of a for expression must be a bool, got ${value.type}${shown}`);
+}
+
+/**
+ * The key a map for expression produces for an element: a string, or a number or bool HCL converts to one.
+ *
+ * @throws Error when the key is null or a collection, as HCL refuses it.
+ */
+function comprehensionKey(value: RuntimeValue<ValueType>): string {
+	if (value.type === 'string' || value.type === 'number' || value.type === 'boolean') return String(value.value);
+	if (value.type === 'null') throw new Error('The key of a for expression must not be null');
+	throw new Error(`The key of a for expression must be a string, got ${value.type}`);
 }
 
 function comparisonValue(value: RuntimeValue<ValueType>): string | number {
