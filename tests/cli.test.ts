@@ -8,7 +8,7 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {discoverConfigs} from '../src/cli';
 import {parseArgs} from '../src/cli';
 import {stackGenerate} from '../src/cli';
-import {mapLimited} from '../src/cli';
+import {inOrder, mapLimited} from '../src/cli';
 import {spawn, spawnSync} from 'node:child_process';
 import {createServer} from 'node:http';
 
@@ -1545,5 +1545,27 @@ describe('mapLimited', function () {
 
 	it('returns nothing for no items', async () => {
 		expect(await mapLimited([], 4, async item => item)).to.deep.equal([]);
+	});
+
+	it('hands each result over as soon as it is ready', async () => {
+		const seen: Array<[number, number]> = [];
+		await mapLimited([30, 0, 10], 3, async delay => {
+			await new Promise(resolve => setTimeout(resolve, delay));
+			return delay;
+		}, (result, index) => seen.push([result, index]));
+		expect(seen).to.deep.equal([[0, 1], [10, 2], [30, 0]]);
+	});
+});
+
+describe('inOrder', function () {
+	it('emits each result once every result before it has been emitted', () => {
+		const emitted: string[] = [];
+		const add = inOrder<string>(result => emitted.push(result));
+		add('c', 2);
+		expect(emitted).to.deep.equal([]);
+		add('a', 0);
+		expect(emitted).to.deep.equal(['a']);
+		add('b', 1);
+		expect(emitted).to.deep.equal(['a', 'b', 'c']);
 	});
 });
