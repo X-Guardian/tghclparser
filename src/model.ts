@@ -437,7 +437,12 @@ export interface FunctionContext {
 	// provide it, which is a hard error for functions that require it.
 	terragruntDir?: string;
 	originalTerragruntDir?: string;
-	includeDir?: string;
+	/**
+	 * What Terragrunt's include functions answer about. `original` is this configuration's directory when it is
+	 * evaluated as one a unit includes, and they answer about it whatever label they are given. `named` holds the
+	 * directories of the configurations this one includes, by label.
+	 */
+	includes?: { original?: string; named: Map<string, string> };
 	repoRoot?: string;
 	readTerragruntConfig?: (relativePath: string) => Promise<RuntimeValue<ValueType> | undefined>;
 	readTFVarsFile?: (relativePath: string) => Promise<RuntimeValue<ValueType> | undefined>;

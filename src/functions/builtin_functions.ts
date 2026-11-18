@@ -3,6 +3,7 @@ import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
 
+import { graphemeClusters } from '../grapheme-clusters';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
 import { expandTerragruntGlob } from './terragrunt_glob';
 import {
@@ -30,6 +31,13 @@ function numberArgument(args: RuntimeValue<ValueType>[], index: number, name: st
 	const argument = requireArgument(args, index, name);
 	if (argument.type !== 'number') throw new Error(`${name} argument ${index + 1} must be a number`);
 	return Number(argument.value);
+}
+
+/** A number argument that go-cty converts to an integer, which it refuses unless the number is whole. */
+function wholeNumberArgument(args: RuntimeValue<ValueType>[], index: number, name: string, parameter: string): number {
+	const value = numberArgument(args, index, name);
+	if (!Number.isInteger(value)) throw new Error(`${name} ${parameter} must be a whole number, not ${value}`);
+	return value;
 }
 
 function arrayArgument(args: RuntimeValue<ValueType>[], index: number, name: string): RuntimeValue<ValueType>[] {
@@ -75,16 +83,19 @@ function sortRuntimeList(items: RuntimeValue<ValueType>[]): RuntimeValue<ValueTy
 	return sorted;
 }
 
-// Go-compatible formatting for a single format string.
+// Go-compatible formatting for a single format string. Arguments are taken as go-cty's formatFSM takes them: each
+// verb uses the next argument, or the one its `[n]` index names, and every argument must be used.
 function goFormat(format: string, args: RuntimeValue<ValueType>[]): string {
 	let output = '';
-	let argumentIndex = 0;
+	let nextArgument = 1;
+	let highestArgument = 0;
 	for (let index = 0; index < format.length;) {
 		if (format[index] !== '%') {
 			output += format[index];
 			index++;
 			continue;
 		}
+		const verbStart = index;
 		index++;
 		if (format[index] === '%') {
 			output += '%';
@@ -107,10 +118,23 @@ function goFormat(format: string, args: RuntimeValue<ValueType>[]): string {
 			while (index < format.length && /[0-9]/u.test(format[index])) index++;
 			if (index > precisionStart) precision = parseInt(format.slice(precisionStart, index), 10);
 		}
+		let argumentNumber = nextArgument;
+		if (format[index] === '[') {
+			const close = format.indexOf(']', index);
+			const explicit = format.slice(index + 1, close);
+			if (close === -1 || !/^[1-9][0-9]*$/u.test(explicit)) throw new Error(`invalid format string starting at offset ${index}`);
+			argumentNumber = Number(explicit);
+			index = close + 1;
+		}
 		const verb = format[index];
 		index++;
-		const argument = args[argumentIndex];
-		argumentIndex++;
+		const raw = format.slice(verbStart, index);
+		if (argumentNumber > args.length) {
+			throw new Error(`not enough arguments for "${raw}" at ${verbStart}: need index ${argumentNumber} but have ${args.length} total`);
+		}
+		highestArgument = Math.max(highestArgument, argumentNumber);
+		nextArgument = argumentNumber + 1;
+		const argument = args[argumentNumber - 1];
 		let rendered: string;
 		switch (verb) {
 			case 's':
@@ -131,6 +155,11 @@ function goFormat(format: string, args: RuntimeValue<ValueType>[]): string {
 		}
 		if (!zeroPad && width > 0 && rendered.length < width) rendered = rendered.padStart(width, ' ');
 		output += rendered;
+	}
+	if (highestArgument < args.length) {
+		throw new Error(highestArgument === 0
+			? 'too many arguments; no verbs in format string'
+			: `too many arguments; only ${highestArgument} used by format string`);
 	}
 	return output;
 }
@@ -449,11 +478,16 @@ export const builtinFunctionGroup = {
 		formatlist: async (args: RuntimeValue<ValueType>[]) => {
 			const format = stringArgument(args, 0, 'formatlist');
 			const lists = args.slice(1).map((_, index) => arrayArgument(args, index + 1, 'formatlist'));
+			if (lists.length === 0) return arrayValue([stringValue(goFormat(format, []))]);
 			const maxLength = Math.max(0, ...lists.map(list => list.length));
 			const results: RuntimeValue<ValueType>[] = [];
 			for (let index = 0; index < maxLength; index++) {
 				const rowArgs = lists.map(list => list[list.length === 1 ? 0 : index]);
-				results.push(stringValue(goFormat(format, rowArgs)));
+				try {
+					results.push(stringValue(goFormat(format, rowArgs)));
+				} catch (error) {
+					throw new Error(`error on format iteration ${index}: ${error instanceof Error ? error.message : String(error)}`);
+				}
 			}
 			return arrayValue(results);
 		},
@@ -602,7 +636,7 @@ export const builtinFunctionGroup = {
 		},
 		setproduct: async (args: RuntimeValue<ValueType>[]) => {
 			const sets = args.map((_, index) => arrayArgument(args, index, 'setproduct'));
-			if (sets.length === 0) return arrayValue([]);
+			if (sets.length < 2) throw new Error('setproduct requires at least two arguments');
 			const combinations: RuntimeValue<ValueType>[][] = [[]];
 			for (const set of sets) {
 				const next: RuntimeValue<ValueType>[][] = [];
@@ -643,12 +677,12 @@ export const builtinFunctionGroup = {
 		strcontains: async (args: RuntimeValue<ValueType>[]) => booleanValue(stringArgument(args, 0, 'strcontains').includes(stringArgument(args, 1, 'strcontains'))),
 		strrev: async (args: RuntimeValue<ValueType>[]) => stringValue([...stringArgument(args, 0, 'strrev')].reverse().join('')),
 		substr: async (args: RuntimeValue<ValueType>[]) => {
-			const value = stringArgument(args, 0, 'substr');
-			let offset = numberArgument(args, 1, 'substr');
-			const length = numberArgument(args, 2, 'substr');
-			if (offset < 0) offset = value.length + offset;
-			if (offset < 0 || offset > value.length) throw new Error('substr offset out of range');
-			return stringValue(value.slice(offset, offset + length));
+			const clusters = graphemeClusters(stringArgument(args, 0, 'substr'));
+			const offset = wholeNumberArgument(args, 1, 'substr', 'offset');
+			const length = wholeNumberArgument(args, 2, 'substr', 'length');
+			if (offset >= 0 && length === 0) return stringValue('');
+			const rest = clusters.slice(Math.max(offset < 0 ? offset + clusters.length : offset, 0));
+			return stringValue((length > 0 ? rest.slice(0, length) : rest).join(''));
 		},
 		sum: async (args: RuntimeValue<ValueType>[]) => numberValue(arrayArgument(args, 0, 'sum').reduce((total, value, index) => {
 			if (value.type !== 'number') throw new Error(`sum list element ${index + 1} must be a number`);

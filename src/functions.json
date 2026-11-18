@@ -550,8 +550,8 @@
 					"types": [
 						"object"
 					],
-					"required": true,
-					"description": "Two or more maps to merge",
+					"required": false,
+					"description": "Maps or objects to merge. With none, the result is an empty object",
 					"variadic": true
 				}
 			],
@@ -1497,7 +1497,7 @@
 					"types": [
 						"array"
 					],
-					"required": true,
+					"required": false,
 					"description": "List of numbers of new bits for each subnet",
 					"variadic": true,
 					"validation": {
@@ -2095,7 +2095,7 @@
 						"object",
 						"null"
 					],
-					"required": true,
+					"required": false,
 					"variadic": true,
 					"description": "Values to format"
 				}
@@ -2169,7 +2169,7 @@
 					"types": [
 						"array"
 					],
-					"required": true,
+					"required": false,
 					"variadic": true,
 					"description": "Lists of values to format"
 				}
@@ -2807,12 +2807,20 @@
 			"description": "Takes multiple sets and returns a new set containing all possible combinations of elements from each set.\n\n* Returns the Cartesian product of the given sets.\n* Sets are represented as lists.",
 			"parameters": [
 				{
+					"name": "first",
+					"types": [
+						"array"
+					],
+					"required": true,
+					"description": "First set to combine"
+				},
+				{
 					"name": "sets",
 					"types": [
 						"array"
 					],
 					"required": true,
-					"description": "Sets to combine",
+					"description": "Further sets to combine, at least one",
 					"variadic": true
 				}
 			],
@@ -4173,7 +4181,7 @@
 		{
 			"name": "deep_merge",
 			"description": "Recursively merges maps and objects, with later arguments taking precedence.",
-			"parameters": [{ "name": "values", "types": ["object"], "required": true, "variadic": true }],
+			"parameters": [{ "name": "values", "types": ["object"], "required": false, "variadic": true }],
 			"returnType": { "types": ["object"], "description": "The recursively merged object." }
 		},
 		{
