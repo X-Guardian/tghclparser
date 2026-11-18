@@ -1153,14 +1153,14 @@ describe('semantic configuration evaluation', () => {
 				readEncryptedSops: true
 			});
 			const unitPath = path.join(root, 'terragrunt.hcl');
-			const result = await withoutSopsKey(root, () => reader.evaluateUnit(unitPath, sopsUnit, root));
+			const result = await withoutSopsKey(() => reader.evaluateUnit(unitPath, sopsUnit, root));
 			assert.equal(result.valid, true, result.error);
 			const masked = { token: '(encrypted)', db: { password: '(encrypted)' } };
 			assert.deepEqual(runtimeValueToPlain(result.inputs!), { yaml: masked, json: masked, token: '(encrypted)' });
 			const inputs = result.inputs!.value as Map<string, unknown>;
 			assert.deepEqual(inputs.get('token'), { type: 'string', value: 'ENC[AES256_GCM,data:nq2Z7w==,iv:A1B2,tag:C3D4,type:str]', encrypted: true });
 
-			const spans = await withoutSopsKey(root, () => reader.evaluatedSpans(unitPath, sopsUnit, root));
+			const spans = await withoutSopsKey(() => reader.evaluatedSpans(unitPath, sopsUnit, root));
 			const shown = spans.map(span => sopsUnit.slice(span.start, span.end));
 			assert.ok(shown.includes('yaml') && shown.includes('local.yaml'), shown.join(', '));
 			assert.ok(!shown.includes('token') && !shown.includes('local.yaml.token'), shown.join(', '));
@@ -1173,7 +1173,7 @@ describe('semantic configuration evaluation', () => {
 		const fs = await import('node:fs/promises');
 		const root = await sopsWorkspace();
 		try {
-			const result = await withoutSopsKey(root, () => evaluator.evaluateUnit(path.join(root, 'terragrunt.hcl'), sopsUnit, root));
+			const result = await withoutSopsKey(() => evaluator.evaluateUnit(path.join(root, 'terragrunt.hcl'), sopsUnit, root));
 			assert.equal(result.valid, false);
 			assert.match(result.error ?? '', /Failed to get the data key/);
 		} finally {
@@ -1193,7 +1193,7 @@ describe('semantic configuration evaluation', () => {
 				workspaceTrusted: true,
 				readEncryptedSops: true
 			});
-			const result = await withoutSopsKey(root, () => reader.evaluateUnit(path.join(root, 'terragrunt.hcl'), sopsUnit, root));
+			const result = await withoutSopsKey(() => reader.evaluateUnit(path.join(root, 'terragrunt.hcl'), sopsUnit, root));
 			assert.equal(result.valid, false);
 			assert.match(result.error ?? '', /Failed to get the data key/);
 		} finally {
@@ -1219,42 +1219,46 @@ describe('semantic configuration evaluation', () => {
 			const fs = await import('node:fs/promises');
 			const unitPath = path.join(root, 'terragrunt.hcl');
 			await fs.writeFile(unitPath, unit);
-			return withoutSopsKey(root, () => encryptedReader().evaluateUnit(unitPath, unit, root));
+			return withoutSopsKey(() => encryptedReader().evaluateUnit(unitPath, unit, root));
 		}
 
-		it('makes everything computed from it unresolved, never a value computed from the encrypted text', async () => {
-			const fs = await import('node:fs/promises');
-			const root = await sopsWorkspace();
-			try {
-				const computed: Record<string, string> = {
-					template: '"https://${local.secrets.token}@example.com"',
-					call: 'upper(local.secrets.token)',
-					conversion: 'tonumber(local.secrets.token)',
-					encoding: 'jsonencode(local.secrets)',
-					comparison: 'local.secrets.token == "x"',
-					arithmetic: 'local.secrets.token + 1',
-					negation: '!local.secrets.token',
-					condition: 'local.secrets.token ? "a" : "b"',
-					index: '{ a = 1 }[local.secrets.token]',
-					key: '{ (local.secrets.token) = 1 }',
-					lookup_key: 'lookup({ a = 1 }, local.secrets.token, 0)',
-					inline_function: 'shout(local.secrets.token)',
-					list_comprehension: '[for item in [local.secrets.token] : "${item}!"]',
-					comprehension_key: '{ for item in [local.secrets.token] : item => 1 }'
-				};
-				for (const [name, expression] of Object.entries(computed)) {
-					const unit = [
-						'function shout(value) { return value.toUpperCase(); }',
-						`locals { secrets = ${secrets} }`,
-						`inputs = { ${name} = ${expression} }`
-					].join('\n');
-					const result = await evaluateWithoutKey(root, unit);
-					assert.equal(result.valid, false, `${name}: ${JSON.stringify(result.inputs ? runtimeValueToPlain(result.inputs) : null)}`);
-					assert.equal(result.unresolved, true, `${name}: ${result.error}`);
-					assert.match(result.error ?? '', /could not be decrypted/, name);
-				}
-			} finally {
-				await fs.rm(root, { recursive: true, force: true });
+		// An evaluation runs sops once, so each case is a test of its own: one evaluation keeps well within a test's time
+		// on a loaded machine, where all of them in one test did not.
+		describe('makes everything computed from it unresolved, never a value computed from the encrypted text', () => {
+			const computed: Record<string, string> = {
+				template: '"https://${local.secrets.token}@example.com"',
+				call: 'upper(local.secrets.token)',
+				conversion: 'tonumber(local.secrets.token)',
+				encoding: 'jsonencode(local.secrets)',
+				comparison: 'local.secrets.token == "x"',
+				arithmetic: 'local.secrets.token + 1',
+				negation: '!local.secrets.token',
+				condition: 'local.secrets.token ? "a" : "b"',
+				index: '{ a = 1 }[local.secrets.token]',
+				key: '{ (local.secrets.token) = 1 }',
+				lookup_key: 'lookup({ a = 1 }, local.secrets.token, 0)',
+				inline_function: 'shout(local.secrets.token)',
+				list_comprehension: '[for item in [local.secrets.token] : "${item}!"]',
+				comprehension_key: '{ for item in [local.secrets.token] : item => 1 }'
+			};
+			for (const [name, expression] of Object.entries(computed)) {
+				it(`${name}: ${expression}`, async () => {
+					const fs = await import('node:fs/promises');
+					const root = await sopsWorkspace();
+					try {
+						const unit = [
+							'function shout(value) { return value.toUpperCase(); }',
+							`locals { secrets = ${secrets} }`,
+							`inputs = { ${name} = ${expression} }`
+						].join('\n');
+						const result = await evaluateWithoutKey(root, unit);
+						assert.equal(result.valid, false, JSON.stringify(result.inputs ? runtimeValueToPlain(result.inputs) : null));
+						assert.equal(result.unresolved, true, result.error);
+						assert.match(result.error ?? '', /could not be decrypted/);
+					} finally {
+						await fs.rm(root, { recursive: true, force: true });
+					}
+				});
 			}
 		});
 
@@ -1298,31 +1302,43 @@ describe('semantic configuration evaluation', () => {
 			}
 		});
 
-		it('never runs a command given it, however it is passed', async () => {
-			const fs = await import('node:fs/promises');
-			const root = await sopsWorkspace();
-			try {
-				const ran = path.join(root, 'ran');
-				const record = (label: string) => `"echo ${label} >> ${ran}"`;
-				const calls: Record<string, string> = {
-					argument: `run_cmd("sh", "-c", ${record('argument')}, local.secrets.token)`,
-					template: `run_cmd("sh", "-c", "echo template >> ${ran}; echo \${local.secrets.token}")`,
-					computed: `run_cmd("sh", "-c", ${record('computed')}, lower(local.secrets.token))`,
-					passed_through: `run_cmd("sh", "-c", ${record('passed_through')}, lookup(local.secrets, "token", ""))`,
-					collection: `run_cmd("sh", "-c", ${record('collection')}, jsonencode(local.secrets.db))`
-				};
-				for (const [name, call] of Object.entries(calls)) {
-					const result = await evaluateWithoutKey(root, [`locals { secrets = ${secrets} }`, `inputs = { ${name} = ${call} }`].join('\n'));
-					assert.equal(result.unresolved, true, `${name}: ${result.error}`);
-				}
-				await assert.rejects(fs.readFile(ran, 'utf8'), { code: 'ENOENT' });
-
-				const plain = await evaluateWithoutKey(root, [`locals { secrets = ${secrets} }`, `inputs = { plain = run_cmd("sh", "-c", ${record('plain')}) }`].join('\n'));
-				assert.equal(plain.valid, true, plain.error);
-				assert.equal(await fs.readFile(ran, 'utf8'), 'plain\n');
-			} finally {
-				await fs.rm(root, { recursive: true, force: true });
+		// One evaluation for each way of passing it, as above.
+		describe('never runs a command given it, however it is passed', () => {
+			const record = (ran: string, label: string) => `"echo ${label} >> ${ran}"`;
+			const calls: Record<string, (ran: string) => string> = {
+				argument: ran => `run_cmd("sh", "-c", ${record(ran, 'argument')}, local.secrets.token)`,
+				template: ran => `run_cmd("sh", "-c", "echo template >> ${ran}; echo \${local.secrets.token}")`,
+				computed: ran => `run_cmd("sh", "-c", ${record(ran, 'computed')}, lower(local.secrets.token))`,
+				passed_through: ran => `run_cmd("sh", "-c", ${record(ran, 'passed_through')}, lookup(local.secrets, "token", ""))`,
+				collection: ran => `run_cmd("sh", "-c", ${record(ran, 'collection')}, jsonencode(local.secrets.db))`
+			};
+			for (const [name, call] of Object.entries(calls)) {
+				it(name, async () => {
+					const fs = await import('node:fs/promises');
+					const root = await sopsWorkspace();
+					try {
+						const ran = path.join(root, 'ran');
+						const result = await evaluateWithoutKey(root, [`locals { secrets = ${secrets} }`, `inputs = { ${name} = ${call(ran)} }`].join('\n'));
+						assert.equal(result.unresolved, true, result.error);
+						await assert.rejects(fs.readFile(ran, 'utf8'), { code: 'ENOENT' });
+					} finally {
+						await fs.rm(root, { recursive: true, force: true });
+					}
+				});
 			}
+
+			it('while it runs one given nothing from it', async () => {
+				const fs = await import('node:fs/promises');
+				const root = await sopsWorkspace();
+				try {
+					const ran = path.join(root, 'ran');
+					const plain = await evaluateWithoutKey(root, [`locals { secrets = ${secrets} }`, `inputs = { plain = run_cmd("sh", "-c", ${record(ran, 'plain')}) }`].join('\n'));
+					assert.equal(plain.valid, true, plain.error);
+					assert.equal(await fs.readFile(ran, 'utf8'), 'plain\n');
+				} finally {
+					await fs.rm(root, { recursive: true, force: true });
+				}
+			});
 		});
 
 		it('renders no generate block or remote_state that would write it to a file', async () => {
@@ -1348,7 +1364,7 @@ describe('semantic configuration evaluation', () => {
 				const unitPath = path.join(root, 'terragrunt.hcl');
 				await fs.writeFile(unitPath, unit);
 				const reader = encryptedReader(true);
-				const rendered = await withoutSopsKey(root, () => reader.evaluateRenderedConfig(unitPath, unit, root));
+				const rendered = await withoutSopsKey(() => reader.evaluateRenderedConfig(unitPath, unit, root));
 				const plain = runtimeValueToPlain(rendered) as Record<string, unknown>;
 				assert.deepEqual(plain.generate, { secret: { path: 'secret.txt' }, plain: { path: 'plain.txt', contents: 'plain' } });
 				assert.equal(Object.prototype.hasOwnProperty.call(plain, 'remote_state'), false, JSON.stringify(plain.remote_state));

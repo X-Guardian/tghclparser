@@ -191,7 +191,7 @@ inputs = {
 			const unit = (reference: string) => `locals {\n  secrets = yamldecode(sops_decrypt_file("\${get_terragrunt_dir()}/secrets.sops.yaml"))\n}\n\ninputs = {\n  token = ${reference}\n}`;
 			const previous = await openUnit(unit('local.secrets.token'));
 			const evaluator = new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true, readEncryptedSops: true });
-			const spans = await withoutSopsKey(directory, () => evaluator.evaluatedSpans(URI.parse(previous.getUri()).fsPath, previous.getContent(), directory));
+			const spans = await withoutSopsKey(() => evaluator.evaluatedSpans(URI.parse(previous.getUri()).fsPath, previous.getContent(), directory));
 			previous.setEvaluatedSpans(spans);
 
 			const complete = async (reference: string) => {
