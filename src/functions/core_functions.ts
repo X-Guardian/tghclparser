@@ -118,29 +118,25 @@ export const coreFunctionGroup = {
             return makeStringValue(path.dirname(fsPath));
         },
         get_parent_terragrunt_dir: async (
-            _args: RuntimeValue<ValueType>[],
+            args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
-            if (!context.includeDir) throw new Error('get_parent_terragrunt_dir requires an included config');
-            return makeStringValue(context.includeDir);
+            const { includeDir, terragruntDir } = selectedInclude(args, context, 'get_parent_terragrunt_dir');
+            return makeStringValue(includeDir ?? terragruntDir);
         },
         path_relative_to_include: async (
-            _args: RuntimeValue<ValueType>[],
+            args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
-            if (!context.includeDir || !context.terragruntDir) {
-                throw new Error('path_relative_to_include requires an included config');
-            }
-            return makeStringValue(path.relative(context.includeDir, context.terragruntDir) || '.');
+            const { includeDir, terragruntDir } = selectedInclude(args, context, 'path_relative_to_include');
+            return makeStringValue(includeDir === undefined ? '.' : path.relative(includeDir, terragruntDir) || '.');
         },
         path_relative_from_include: async (
-            _args: RuntimeValue<ValueType>[],
+            args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
-            if (!context.includeDir || !context.terragruntDir) {
-                throw new Error('path_relative_from_include requires an included config');
-            }
-            return makeStringValue(path.relative(context.terragruntDir, context.includeDir) || '.');
+            const { includeDir, terragruntDir } = selectedInclude(args, context, 'path_relative_from_include');
+            return makeStringValue(includeDir === undefined ? '.' : path.relative(terragruntDir, includeDir) || '.');
         },
         get_terragrunt_source_cli_flag: async (
             _args: RuntimeValue<ValueType>[],
@@ -349,6 +345,36 @@ export const coreFunctionGroup = {
         }
     }
 };
+
+/**
+ * The include a Terragrunt include function answers about, chosen as Terragrunt's `getSelectedIncludeBlock` does:
+ * in a configuration a unit includes, that configuration whatever the label; in a unit with one include, that
+ * include whatever the label; in a unit with several, the one its single argument labels. A unit that includes
+ * nothing has no include directory, and the functions answer about the unit itself.
+ *
+ * @throws when the evaluation does not know the configuration's includes, or the unit has several and the label
+ *   names none of them.
+ */
+function selectedInclude(
+    args: RuntimeValue<ValueType>[],
+    context: FunctionContext,
+    name: string
+): { includeDir?: string; terragruntDir: string } {
+    if (!context.includes || !context.terragruntDir) {
+        throw new Error(`${name} needs the configuration's includes, which are not known where it is evaluated`);
+    }
+    const { original, named } = context.includes;
+    const terragruntDir = context.terragruntDir;
+    if (original !== undefined) return { includeDir: original, terragruntDir };
+    if (named.size <= 1) return { includeDir: [...named.values()][0], terragruntDir };
+    if (args.length !== 1 || args[0].type !== 'string') {
+        throw new Error(`${name} needs the label of one of the configuration's ${named.size} include blocks, as its one argument`);
+    }
+    const label = String(args[0].value);
+    const includeDir = named.get(label);
+    if (includeDir === undefined) throw new Error(`There is no include block in the current config with the label '${label}'`);
+    return { includeDir, terragruntDir };
+}
 
 function mergeRuntimeMaps(
     target: Map<string, RuntimeValue<ValueType>>,

@@ -147,6 +147,54 @@ describe('semantic configuration evaluation', () => {
 		});
 	});
 
+	describe('substr', () => {
+		const substr = async (args: string): Promise<unknown> => {
+			const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = substr(${args})\n}\n`, process.cwd());
+			assert.equal(result.error, undefined);
+			return (runtimeValueToPlain(result.inputs!) as Record<string, unknown>).x;
+		};
+
+		it('takes a length from an offset', async () => {
+			assert.equal(await substr('"hello world", 1, 4'), 'ello');
+			assert.equal(await substr('"hello", 0, 10'), 'hello');
+			assert.equal(await substr('"hello", 1, 0'), '');
+		});
+
+		it('counts a negative offset from the end, and starts at the beginning when it reaches past it', async () => {
+			assert.equal(await substr('"hello world", -5, 3'), 'wor');
+			assert.equal(await substr('"live/gcp/app", -63, -1'), 'live/gcp/app');
+			assert.equal(await substr('"hello", -10, 2'), 'he');
+		});
+
+		it('takes the rest of the string for a negative length', async () => {
+			assert.equal(await substr('"hello world", 6, -1'), 'world');
+			assert.equal(await substr('"hello", -3, -5'), 'llo');
+		});
+
+		it('takes the rest of the string for a length of 0 after a negative offset', async () => {
+			assert.equal(await substr('"hello", -3, 0'), 'llo');
+		});
+
+		it('returns an empty string for an offset at or past the end', async () => {
+			assert.equal(await substr('"hello", 5, 2'), '');
+			assert.equal(await substr('"hello", 9, -1'), '');
+			assert.equal(await substr('"", 0, 1'), '');
+		});
+
+		it('rejects an offset or a length that is not a whole number', async () => {
+			for (const [args, parameter] of [['"hello", 1.5, 2', 'offset'], ['"hello", 1, 2.5', 'length'], ['"hello", -0.5, -1', 'offset']]) {
+				const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = substr(${args})\n}\n`, process.cwd());
+				assert.equal(result.valid, false, args);
+				assert.match(result.error ?? '', new RegExp(`substr ${parameter} must be a whole number`), args);
+			}
+		});
+
+		it('counts grapheme clusters', async () => {
+			assert.equal(await substr('"🇬🇧éx", 1, 1'), 'é');
+			assert.equal(await substr('"a👍🏽b", -2, 1'), '👍🏽');
+		});
+	});
+
 	it('places a missing local and a missing attribute where they are written, and reports both', async () => {
 		const content = [
 			'locals {',
@@ -249,6 +297,133 @@ describe('semantic configuration evaluation', () => {
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
 		}
+	});
+
+	describe('include paths', () => {
+		const withUnit = async (files: Record<string, string>, check: (root: string, result: Awaited<ReturnType<ConfigEvaluator['evaluateUnit']>>) => void) => {
+			const os = await import('node:os');
+			const fs = await import('node:fs/promises');
+			const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-include-paths-')));
+			try {
+				await fs.mkdir(path.join(root, '.git'));
+				for (const [file, content] of Object.entries(files)) {
+					await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+					await fs.writeFile(path.join(root, file), content);
+				}
+				const unitPath = path.join(root, 'live', 'app', 'terragrunt.hcl');
+				check(root, await evaluator.evaluateUnit(unitPath, files['live/app/terragrunt.hcl'], path.dirname(unitPath)));
+			} finally {
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		};
+
+		it('answers in an included configuration\'s locals with that configuration\'s directory', async () => {
+			await withUnit({
+				'root.hcl': [
+					'locals {',
+					'  relative = path_relative_to_include()',
+					'  from     = path_relative_from_include()',
+					'  parent   = get_parent_terragrunt_dir()',
+					'}',
+					'inputs = {',
+					'  relative = local.relative',
+					'  from     = local.from',
+					'  parent   = local.parent',
+					'  key      = "${path_relative_to_include()}/terraform.tfstate"',
+					'}'
+				].join('\n'),
+				'live/app/terragrunt.hcl': 'include "root" {\n  path   = find_in_parent_folders("root.hcl")\n  expose = true\n}\ninputs = { exposed = include.root.locals.relative }\n'
+			}, (root, result) => {
+				assert.equal(result.valid, true, result.error);
+				assert.deepEqual(runtimeValueToPlain(result.inputs!), {
+					relative: 'live/app',
+					from: '../..',
+					parent: root,
+					key: 'live/app/terraform.tfstate',
+					exposed: 'live/app'
+				});
+			});
+		});
+
+		it('answers in the unit with the directory of the configuration it includes', async () => {
+			await withUnit({
+				'root.hcl': 'inputs = {}\n',
+				'live/app/terragrunt.hcl': 'include "root" {\n  path = find_in_parent_folders("root.hcl")\n}\ninputs = { relative = path_relative_to_include(), parent = get_parent_terragrunt_dir() }\n'
+			}, (root, result) => {
+				assert.equal(result.valid, true, result.error);
+				assert.deepEqual(runtimeValueToPlain(result.inputs!), { relative: 'live/app', parent: root });
+			});
+		});
+
+		it('answers with the unit\'s own directory when it includes nothing, or a configuration beside it', async () => {
+			const inputs = 'inputs = { relative = path_relative_to_include(), from = path_relative_from_include(), parent = get_parent_terragrunt_dir() }\n';
+			await withUnit({ 'live/app/terragrunt.hcl': inputs }, (root, result) => {
+				assert.equal(result.valid, true, result.error);
+				assert.deepEqual(runtimeValueToPlain(result.inputs!), { relative: '.', from: '.', parent: path.join(root, 'live', 'app') });
+			});
+			await withUnit({
+				'live/app/common.hcl': inputs,
+				'live/app/terragrunt.hcl': 'include "common" {\n  path = "common.hcl"\n}\n'
+			}, (root, result) => {
+				assert.equal(result.valid, true, result.error);
+				assert.deepEqual(runtimeValueToPlain(result.inputs!), { relative: '.', from: '.', parent: path.join(root, 'live', 'app') });
+			});
+		});
+
+		it('answers about the include a unit with several names, and in each included configuration about that configuration', async () => {
+			const answers = (prefix: string) => `${prefix}_relative = path_relative_to_include("root")\n  ${prefix}_from = path_relative_from_include("root")\n  ${prefix}_parent = get_parent_terragrunt_dir("root")\n`;
+			await withUnit({
+				'root.hcl': `inputs = {\n  ${answers('root')}}\n`,
+				'live/env.hcl': `inputs = {\n  ${answers('env')}}\n`,
+				'live/app/terragrunt.hcl': [
+					'include "root" {\n  path = find_in_parent_folders("root.hcl")\n}',
+					'include "env" {\n  path = find_in_parent_folders("env.hcl")\n}',
+					'inputs = {',
+					'  unit_env_relative = path_relative_to_include("env")',
+					'  unit_env_from     = path_relative_from_include("env")',
+					'  unit_env_parent   = get_parent_terragrunt_dir("env")',
+					'  unit_root         = path_relative_to_include("root")',
+					'}'
+				].join('\n')
+			}, (root, result) => {
+				assert.equal(result.valid, true, result.error);
+				assert.deepEqual(runtimeValueToPlain(result.inputs!), {
+					root_relative: 'live/app',
+					root_from: '../..',
+					root_parent: root,
+					env_relative: 'app',
+					env_from: '..',
+					env_parent: path.join(root, 'live'),
+					unit_env_relative: 'app',
+					unit_env_from: '..',
+					unit_env_parent: path.join(root, 'live'),
+					unit_root: 'live/app'
+				});
+			});
+		});
+
+		it('needs the label of an include the unit has when it has several, and takes its only include whatever the label', async () => {
+			const twoIncludes = (call: string) => ({
+				'root.hcl': 'inputs = {}\n',
+				'live/env.hcl': 'inputs = {}\n',
+				'live/app/terragrunt.hcl': `include "root" {\n  path = find_in_parent_folders("root.hcl")\n}\ninclude "env" {\n  path = find_in_parent_folders("env.hcl")\n}\ninputs = { value = ${call} }\n`
+			});
+			await withUnit(twoIncludes('path_relative_to_include()'), (_root, result) => {
+				assert.equal(result.valid, false);
+				assert.match(result.error ?? '', /path_relative_to_include needs the label of one of the configuration's 2 include blocks/);
+			});
+			await withUnit(twoIncludes('get_parent_terragrunt_dir("region")'), (_root, result) => {
+				assert.equal(result.valid, false);
+				assert.match(result.error ?? '', /There is no include block in the current config with the label 'region'/);
+			});
+			await withUnit({
+				'root.hcl': 'inputs = {}\n',
+				'live/app/terragrunt.hcl': 'include "root" {\n  path = find_in_parent_folders("root.hcl")\n}\ninputs = { value = path_relative_to_include("region") }\n'
+			}, (_root, result) => {
+				assert.equal(result.valid, true, result.error);
+				assert.deepEqual(runtimeValueToPlain(result.inputs!), { value: 'live/app' });
+			});
+		});
 	});
 
 	it('reports a broken local nothing reads, in the unit and in a configuration it includes, before a broken input', async () => {
