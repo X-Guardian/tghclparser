@@ -2435,6 +2435,27 @@ async function validateFile(
 	}];
 }
 
+/**
+ * Maps items through an async function with at most `limit` calls in flight.
+ *
+ * @param items the items to map.
+ * @param limit the most calls running at once.
+ * @param fn the function applied to each item.
+ * @returns the results, in the order of `items`.
+ */
+export async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+	const results = Array.from<R>({ length: items.length });
+	let next = 0;
+	const worker = async (): Promise<void> => {
+		while (next < items.length) {
+			const index = next++;
+			results[index] = await fn(items[index]);
+		}
+	};
+	await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+	return results;
+}
+
 async function dependencyOrderedFiles(files: string[]): Promise<string[]> {
 	const byDirectory = new Map<string, string>();
 	for (const file of files) byDirectory.set(path.dirname(await fs.realpath(file)), file);
@@ -2613,7 +2634,7 @@ async function main(argv: string[]): Promise<number> {
 	const roots = parsed.paths.length > 0 ? parsed.paths.map(target => path.resolve(parsed.workingDir, target)) : [parsed.workingDir];
 	const files = (await Promise.all(roots.map(collectFiles))).flat().sort();
 	if (files.length === 0) throw new Error(`No Terragrunt HCL files found under ${parsed.workingDir}`);
-	const diagnostics = (await Promise.all(files.map(file => validateFile(file, parsed.workingDir, parsed.experiments, 'validate', true, parsed.offline)))).flat();
+	const diagnostics = (await mapLimited(files, os.availableParallelism(), file => validateFile(file, parsed.workingDir, parsed.experiments, 'validate', true, parsed.offline))).flat();
 	if (parsed.showConfigPath) {
 		if (diagnostics.length > 0) {
 			const paths = [...new Set(diagnostics.map(item => item.range.filename))];

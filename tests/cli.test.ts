@@ -8,6 +8,7 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {discoverConfigs} from '../src/cli';
 import {parseArgs} from '../src/cli';
 import {stackGenerate} from '../src/cli';
+import {mapLimited} from '../src/cli';
 import {spawn, spawnSync} from 'node:child_process';
 import {createServer} from 'node:http';
 
@@ -1523,5 +1524,26 @@ describe('CLI dependency graph', function () {
 		expect(named('right'), result.stdout).to.equal(true);
 
 		await fs.rm(root, {recursive: true, force: true});
+	});
+});
+
+describe('mapLimited', function () {
+	it('runs no more than the limit at once and keeps the order of the items', async () => {
+		let running = 0;
+		let most = 0;
+		const items = Array.from({length: 20}, (_, index) => index);
+		const results = await mapLimited(items, 3, async item => {
+			running++;
+			most = Math.max(most, running);
+			await new Promise(resolve => setTimeout(resolve, (item * 7) % 5));
+			running--;
+			return item * 2;
+		});
+		expect(most).to.equal(3);
+		expect(results).to.deep.equal(items.map(item => item * 2));
+	});
+
+	it('returns nothing for no items', async () => {
+		expect(await mapLimited([], 4, async item => item)).to.deep.equal([]);
 	});
 });
