@@ -147,6 +147,54 @@ describe('semantic configuration evaluation', () => {
 		});
 	});
 
+	describe('substr', () => {
+		const substr = async (args: string): Promise<unknown> => {
+			const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = substr(${args})\n}\n`, process.cwd());
+			assert.equal(result.error, undefined);
+			return (runtimeValueToPlain(result.inputs!) as Record<string, unknown>).x;
+		};
+
+		it('takes a length from an offset', async () => {
+			assert.equal(await substr('"hello world", 1, 4'), 'ello');
+			assert.equal(await substr('"hello", 0, 10'), 'hello');
+			assert.equal(await substr('"hello", 1, 0'), '');
+		});
+
+		it('counts a negative offset from the end, and starts at the beginning when it reaches past it', async () => {
+			assert.equal(await substr('"hello world", -5, 3'), 'wor');
+			assert.equal(await substr('"live/gcp/app", -63, -1'), 'live/gcp/app');
+			assert.equal(await substr('"hello", -10, 2'), 'he');
+		});
+
+		it('takes the rest of the string for a negative length', async () => {
+			assert.equal(await substr('"hello world", 6, -1'), 'world');
+			assert.equal(await substr('"hello", -3, -5'), 'llo');
+		});
+
+		it('takes the rest of the string for a length of 0 after a negative offset', async () => {
+			assert.equal(await substr('"hello", -3, 0'), 'llo');
+		});
+
+		it('returns an empty string for an offset at or past the end', async () => {
+			assert.equal(await substr('"hello", 5, 2'), '');
+			assert.equal(await substr('"hello", 9, -1'), '');
+			assert.equal(await substr('"", 0, 1'), '');
+		});
+
+		it('rejects an offset or a length that is not a whole number', async () => {
+			for (const [args, parameter] of [['"hello", 1.5, 2', 'offset'], ['"hello", 1, 2.5', 'length'], ['"hello", -0.5, -1', 'offset']]) {
+				const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = substr(${args})\n}\n`, process.cwd());
+				assert.equal(result.valid, false, args);
+				assert.match(result.error ?? '', new RegExp(`substr ${parameter} must be a whole number`), args);
+			}
+		});
+
+		it('counts grapheme clusters', async () => {
+			assert.equal(await substr('"🇬🇧éx", 1, 1'), 'é');
+			assert.equal(await substr('"a👍🏽b", -2, 1'), '👍🏽');
+		});
+	});
+
 	it('places a missing local and a missing attribute where they are written, and reports both', async () => {
 		const content = [
 			'locals {',
