@@ -1,11 +1,9 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { split } from 'shlex';
-
 import { parseHclSyntax } from './syntax';
 
-/** The variables `-var` and `-var-file` arguments set, as Terragrunt reads them from `extra_arguments`. */
+/** The variables `-var` and `-var-file` arguments set, as Terragrunt reads them. */
 export interface VarFlags {
 	/** Names set by `-var=NAME=VALUE`. */
 	vars: string[];
@@ -14,19 +12,18 @@ export interface VarFlags {
 }
 
 /**
- * Reads the `-var` and `-var-file` flags from a list of OpenTofu arguments, as Terragrunt does: each argument is
- * unquoted as a shell would, then `-var=NAME=VALUE` gives `NAME` and `-var-file=PATH` gives `PATH`.
+ * Reads the `-var` and `-var-file` flags from a list of OpenTofu arguments, as Terragrunt 1.2 does: each argument is
+ * taken as written, since OpenTofu gets it with no shell in between, so `-var=NAME=VALUE` gives `NAME` and
+ * `-var-file=PATH` gives `PATH`, quotes included.
  *
  * @param args the arguments, one OpenTofu argument each.
  * @returns the variable names and var files they set.
- * @throws when an argument is not valid shell quoting.
  */
 export function varFlags(args: readonly string[]): VarFlags {
 	const flags: VarFlags = { vars: [], varFiles: [] };
 	for (const arg of args) {
-		const unquoted = split(arg).join(' ');
-		if (unquoted.startsWith('-var=')) flags.vars.push(unquoted.slice('-var='.length).split('=')[0]);
-		if (unquoted.startsWith('-var-file=')) flags.varFiles.push(unquoted.slice('-var-file='.length));
+		if (arg.startsWith('-var=')) flags.vars.push(arg.slice('-var='.length).split('=')[0]);
+		if (arg.startsWith('-var-file=')) flags.varFiles.push(arg.slice('-var-file='.length));
 	}
 	return flags;
 }

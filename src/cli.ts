@@ -29,6 +29,7 @@ import { createRegistryResolver } from './registry';
 import { RemoteModuleStore } from './remote-modules';
 import { parseHclSyntax } from './syntax';
 import { automaticVarFiles, varFileNames, varFlags } from './var-files';
+import type { VarFlags } from './var-files';
 import { LocatedWorkspaceError, Workspace } from './Workspace';
 
 export interface CLIOptions {
@@ -147,6 +148,9 @@ function usage(): string {
 		'                         variables of its module, fetching remote modules',
 		'  --strict               With --inputs, fail on inputs the module does',
 		'                         not declare',
+		'  -var=NAME=VALUE        With --inputs, count NAME as passed to every unit',
+		'  -var-file=PATH         With --inputs, count the variables PATH sets as',
+		'                         passed to every unit',
 		'  --ignore-included-inputs',
 		'                         With --inputs, do not report undeclared inputs',
 		'                         that only an included configuration sets',
@@ -2433,21 +2437,23 @@ async function loadUnits(units: string[], workingDir: string): Promise<Map<strin
  * The variables Terragrunt passes a unit's module other than by `inputs`, as `hcl validate --inputs` counts them:
  * `TF_VAR_` variables in the environment and in `extra_arguments` `env_vars`, `-var` and `-var-file` in
  * `extra_arguments` `arguments`, its `required_var_files` and the `optional_var_files` that exist, and the automatic
- * var files in the module and the unit directory. Every `extra_arguments` block counts, whatever its commands.
+ * var files in the module and the unit directory, and `-var` and `-var-file` given to `hcl validate` itself. Every
+ * `extra_arguments` block counts, whatever its commands.
  *
  * @param rendered the unit's rendered configuration.
- * @param unitDir directory of the unit; relative var files are resolved against it.
+ * @param unitDir directory of the unit; relative var files in the configuration are resolved against it.
  * @param moduleDir directory of the unit's module.
+ * @param commandLine the `-var` and `-var-file` flags given to `hcl validate`, with each var file absolute.
  * @returns the names.
  * @throws when a var file cannot be read or parsed.
  */
-async function passedOutsideInputs(rendered: Record<string, unknown>, unitDir: string, moduleDir: string): Promise<Set<string>> {
-	const names = new Set<string>();
+async function passedOutsideInputs(rendered: Record<string, unknown>, unitDir: string, moduleDir: string, commandLine: VarFlags): Promise<Set<string>> {
+	const names = new Set<string>(commandLine.vars);
 	const fromEnv = (env: Record<string, unknown>) => {
 		for (const key of Object.keys(env)) if (key.startsWith('TF_VAR_')) names.add(key.slice('TF_VAR_'.length));
 	};
 	fromEnv(process.env);
-	const varFiles: string[] = [];
+	const varFiles: string[] = [...commandLine.varFiles];
 	for (const block of Object.values(asRecord(asRecord(rendered.terraform).extra_arguments))) {
 		const extra = asRecord(block);
 		const strings = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
@@ -2477,6 +2483,21 @@ function asRecord(value: unknown): Record<string, unknown> {
 	return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+/** How `hcl validate --inputs` checks each unit. */
+interface InputCheckOptions {
+	/** Experiments the evaluation enables. */
+	experiments: string[];
+	/** Read a sops file that cannot be decrypted as written, as `--offline` asks. */
+	readEncryptedSops: boolean;
+	/**
+	 * Do not report an undeclared name that only an included configuration's `inputs` sets, as
+	 * `--ignore-included-inputs` asks. Such names still count towards required variables.
+	 */
+	ignoreIncludedInputs: boolean;
+	/** The `-var` and `-var-file` flags given to `hcl validate`, with each var file absolute. */
+	commandLine: VarFlags;
+}
+
 /**
  * Checks a unit's inputs against the variables of the module it sources, as Terragrunt's `hcl validate --inputs`
  * does. A required variable nothing sets is an error, as is a module that cannot be read, since its variables are
@@ -2485,20 +2506,11 @@ function asRecord(value: unknown): Record<string, unknown> {
  * @param filePath the unit.
  * @param workDir the directory validation runs from.
  * @param unit the unit as loaded into a workspace that loads modules.
- * @param experiments experiments the evaluation enables.
- * @param readEncryptedSops read a sops file that cannot be decrypted as written, as `--offline` asks.
- * @param ignoreIncludedInputs do not report an undeclared name that only an included configuration's `inputs`
- *   sets, as `--ignore-included-inputs` asks. Such names still count towards required variables.
+ * @param options how the check runs.
  * @returns the findings, empty when the inputs align.
  */
-async function checkInputs(
-	filePath: string,
-	workDir: string,
-	unit: LoadedUnit,
-	experiments: string[],
-	readEncryptedSops: boolean,
-	ignoreIncludedInputs: boolean
-): Promise<DiagnosticOutput[]> {
+async function checkInputs(filePath: string, workDir: string, unit: LoadedUnit, options: InputCheckOptions): Promise<DiagnosticOutput[]> {
+	const { experiments, readEncryptedSops, ignoreIncludedInputs, commandLine } = options;
 	const finding = (detail: string, severity: DiagnosticOutput['severity']): DiagnosticOutput => ({
 		range: { filename: filePath, start: { line: 1, column: 1, byte: 0 }, end: { line: 1, column: 1, byte: 0 } },
 		summary: severity === 'error' ? 'HCL validation error' : 'HCL validation warning',
@@ -2535,7 +2547,7 @@ async function checkInputs(
 		const unresolved = evaluator.unresolvedRenderFields()
 			.filter(entry => entry.field.startsWith('inputs.'))
 			.map(entry => entry.field.slice('inputs.'.length));
-		const outside = await passedOutsideInputs(rendered, unitDir, moduleDir);
+		const outside = await passedOutsideInputs(rendered, unitDir, moduleDir, commandLine);
 		names = new Set([...Object.keys(asRecord(rendered.inputs)), ...unresolved, ...outside]);
 		if (ignoreIncludedInputs) ignored = new Set(render.includedOnlyInputs.filter(name => !outside.has(name)));
 	} catch (error) {
@@ -2795,8 +2807,11 @@ async function main(argv: string[]): Promise<number> {
 		return 0;
 	}
 	if (argv[0] !== 'hcl' || argv[1] !== 'validate') throw new Error('Unsupported command; use "tghclp hcl validate", "find", "list", "dag graph", or "info print"');
-	const parsed = parseArgs(argv.slice(2));
+	const isVarFlag = (argument: string) => argument.startsWith('-var=') || argument.startsWith('-var-file=');
+	const parsed = parseArgs(argv.slice(2).filter(argument => !isVarFlag(argument)));
 	if (parsed === 'help') { console.log(usage()); return 0; }
+	const commandLineFlags = varFlags(argv.slice(2).filter(isVarFlag));
+	const commandLine = { vars: commandLineFlags.vars, varFiles: commandLineFlags.varFiles.map(file => path.resolve(file)) };
 	if (parsed.strict && !parsed.inputs) throw new Error('specifying --strict without --inputs is invalid');
 	if (parsed.ignoreIncludedInputs && !parsed.inputs) throw new Error('specifying --ignore-included-inputs without --inputs is invalid');
 	const roots = parsed.paths.length > 0 ? parsed.paths.map(target => path.resolve(parsed.workingDir, target)) : [parsed.workingDir];
@@ -2808,7 +2823,12 @@ async function main(argv: string[]): Promise<number> {
 		const units = files.filter((file, index) => path.basename(file) === 'terragrunt.hcl' && errors[index].length === 0);
 		const loaded = await loadUnits(units, parsed.workingDir);
 		for (const unit of units) {
-			diagnostics.push(...await checkInputs(unit, parsed.workingDir, loaded.get(unit)!, parsed.experiments, parsed.offline, parsed.ignoreIncludedInputs));
+			diagnostics.push(...await checkInputs(unit, parsed.workingDir, loaded.get(unit)!, {
+				experiments: parsed.experiments,
+				readEncryptedSops: parsed.offline,
+				ignoreIncludedInputs: parsed.ignoreIncludedInputs,
+				commandLine
+			}));
 		}
 	}
 	const failures = diagnostics.filter(item => item.severity === 'error' || parsed.strict);

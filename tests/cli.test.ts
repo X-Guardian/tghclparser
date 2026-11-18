@@ -1443,23 +1443,32 @@ describe('CLI configuration discovery', function () {
 		await fs.mkdir(unitDir, {recursive: true});
 		await fs.writeFile(path.join(unitDir, 'common.tfvars'), 'name = "app"\n');
 		const unit = path.join(unitDir, 'terragrunt.hcl');
-		const validate = async (terraform: string, env: Record<string, string> = {}) => {
+		const validate = async (terraform: string, env: Record<string, string> = {}, flags: string[] = []) => {
 			await fs.writeFile(unit, `terraform {\n  source = "../../modules/app"\n${terraform}}\n`);
-			return spawnSync(process.execPath, [cli, 'hcl', 'validate', '--inputs', '--strict', '--working-dir', root], {cwd: root, encoding: 'utf8', env: {...process.env, ...env}});
+			return spawnSync(process.execPath, [cli, 'hcl', 'validate', '--inputs', '--strict', ...flags, '--working-dir', root], {cwd: root, encoding: 'utf8', env: {...process.env, ...env}});
 		};
 		const block = (attribute: string) => `  extra_arguments "vars" {\n    commands = ["apply"]\n    ${attribute}\n  }\n`;
 
 		expect((await validate('')).status).to.equal(1);
-		for (const [terraform, env] of [
+		for (const [terraform, env, flags] of [
 			['', {TF_VAR_name: 'app'}],
 			[block('env_vars = { TF_VAR_name = "app" }')],
-			[block('arguments = ["-var=\'name\'=app"]')],
+			[block('arguments = ["-var=name=app"]')],
 			[block('arguments = ["-var-file=common.tfvars"]')],
-			[block('required_var_files = ["${get_terragrunt_dir()}/common.tfvars"]')]
-		] as [string, Record<string, string>?][]) {
-			const result = await validate(terraform, env);
-			expect(result.status).to.equal(0, `${terraform} ${JSON.stringify(env)}: ${result.stderr}`);
+			[block('required_var_files = ["${get_terragrunt_dir()}/common.tfvars"]')],
+			['', {}, ['-var=name=app']],
+			['', {}, ['-var-file=live/app/common.tfvars']]
+		] as [string, Record<string, string>?, string[]?][]) {
+			const result = await validate(terraform, env, flags);
+			expect(result.status).to.equal(0, `${terraform} ${JSON.stringify(env)} ${JSON.stringify(flags)}: ${result.stderr}`);
 		}
+
+		const quoted = await validate(block('arguments = ["-var=\'name\'=app"]'));
+		expect(quoted.status).to.equal(1);
+		expect(quoted.stderr).to.equal(
+			`${unit}: HCL validation warning: Input "'name'" is not declared by module ../../modules/app\n`
+			+ `${unit}: HCL validation error: Missing required module inputs: name\n`
+		);
 
 		await fs.copyFile(path.join(unitDir, 'common.tfvars'), path.join(unitDir, 'terraform.tfvars'));
 		const automatic = await validate('');

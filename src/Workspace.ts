@@ -1013,12 +1013,7 @@ export class Workspace {
 		const env = value('env_vars');
 		if (args === undefined || required === undefined || optional === undefined) return undefined;
 		if (env !== undefined && (env.type !== 'object' || env.children.some(child => child.type !== 'attribute'))) return undefined;
-		let flags;
-		try {
-			flags = varFlags(args);
-		} catch {
-			return undefined;
-		}
+		const flags = varFlags(args);
 		const envNames = (env?.children ?? [])
 			.map(child => child.children.find(part => part.type === 'attribute_identifier')?.getDisplayText() ?? '')
 			.filter(key => key.startsWith('TF_VAR_'))
