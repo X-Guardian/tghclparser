@@ -263,8 +263,8 @@ describe('semantic configuration evaluation', () => {
 
 			it('holds conditions and operators to the same', async () => {
 				assert.equal(await rendered('%{ if "1" }yes%{ else }no%{ endif }'), 'yes');
-				assert.equal(await rendered('${!"true"}'), 'false');
-				assert.equal(await rendered('${null && true}'), 'false');
+				assert.equal(await rendered('${!"true"}'), false);
+				assert.equal(await rendered('${null && true}'), false);
 				assert.match(await refused('%{ if 1 }yes%{ else }no%{ endif }'), /The condition expression must be of type bool\./);
 				assert.match(await refused('%{ if null }yes%{ endif }'), /The condition value is null\. Conditions must either be true or false\./);
 				assert.match(await refused('${1 && true}'), /Unsuitable value for left operand: bool required, but have number\./);
