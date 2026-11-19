@@ -32,6 +32,69 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	it('names a dag graph\'s units and dependencies as Terragrunt does through symlinked folders', async () => {
+		// Terragrunt names a unit by the path it walked to it and a dependency by
+		// its config_path with symlinks resolved, both relative to the working
+		// directory as given. It lists the units it discovered, not the files they
+		// include, the dependencies outside the working directory, or the folder a
+		// dependency was reached through, and a stack's components are not its
+		// dependencies.
+		const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-dag-')));
+		const live = path.join(base, 'real', 'live');
+		for (const unit of ['a', 'b', 'd', 'st']) await fs.mkdir(path.join(live, unit), {recursive: true});
+		await fs.writeFile(path.join(live, 'st', 'terragrunt.stack.hcl'), 'unit "u" {\n  source = "../../ext/c"\n  path = "u"\n}\n');
+		await fs.mkdir(path.join(base, 'real', 'ext', 'c'), {recursive: true});
+		await fs.symlink('real', path.join(base, 'link'));
+		await fs.symlink('b', path.join(live, 'b-link'));
+		await fs.writeFile(path.join(live, 'root.hcl'), 'locals { region = "eu" }\n');
+		await fs.writeFile(path.join(live, 'a', 'terragrunt.hcl'), [
+			'include "root" {',
+			'  path = find_in_parent_folders("root.hcl")',
+			'}',
+			'dependency "b" {',
+			'  config_path = "../b"',
+			'}',
+			'dependency "c" {',
+			'  config_path = "../../ext/c"',
+			'}',
+			''
+		].join('\n'));
+		await fs.writeFile(path.join(live, 'b', 'terragrunt.hcl'), 'inputs = {}\n');
+		await fs.writeFile(path.join(live, 'd', 'terragrunt.hcl'), 'dependency "b" {\n  config_path = "../b-link"\n}\n');
+		await fs.writeFile(path.join(base, 'real', 'ext', 'c', 'terragrunt.hcl'), 'inputs = {}\n');
+		const cli = path.resolve('dist/cli.cjs');
+		const graph = (workingDir: string): string => {
+			const run = spawnSync(process.execPath, [cli, 'dag', 'graph', '--working-dir', workingDir], {encoding: 'utf8'});
+			expect(run.status, run.stderr).to.equal(0);
+			return run.stdout;
+		};
+		expect(graph(live)).to.equal([
+			'digraph {',
+			'\t"a" ;',
+			'\t"a" -> "../ext/c";',
+			'\t"a" -> "b";',
+			'\t"b" ;',
+			'\t"d" ;',
+			'\t"d" -> "b";',
+			'\t"st" ;',
+			'}',
+			''
+		].join('\n'));
+		expect(graph(path.join(base, 'link', 'live'))).to.equal([
+			'digraph {',
+			'\t"a" ;',
+			'\t"a" -> "../../real/ext/c";',
+			'\t"a" -> "../../real/live/b";',
+			'\t"b" ;',
+			'\t"d" ;',
+			'\t"d" -> "../../real/live/b";',
+			'\t"st" ;',
+			'}',
+			''
+		].join('\n'));
+		await fs.rm(base, {recursive: true, force: true});
+	});
+
 	it('generates a local stack component and evaluated values file', async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-stack-'));
 		await fs.mkdir(path.join(root, 'modules', 'app'), {recursive: true});
