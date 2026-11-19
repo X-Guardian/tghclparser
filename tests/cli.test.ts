@@ -927,29 +927,47 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
-	it('refuses mock_outputs that do not say which commands may see them', async () => {
-		// Terragrunt's default for an omitted list is every command, so a
-		// mocked value can reach an apply. That default is not carried here: a
-		// unit that wants mocks names the commands, and one that does not is
-		// stopped rather than given the most permissive reading.
-		const cli = path.resolve('dist/cli.cjs');
-		const made = await workspaceWithUnappliedDependency(
-			dependencyBlock(['  mock_outputs = {', '    answer = "invented"', '  }'])
-		);
+	// An executable that answers `output -json` as for a dependency that was never applied, and otherwise prints the
+	// command it ran with the input the unit passed it, so a run shows which value reached OpenTofu.
+	async function unappliedTfStub(root: string): Promise<string> {
+		const stub = path.join(root, 'tf-stub');
+		await fs.writeFile(stub, [
+			'#!/bin/sh',
+			'if [ "$1" = output ]; then echo "{}"; exit 0; fi',
+			'echo "$1 seen=$TF_VAR_seen"'
+		].join('\n'), {mode: 0o755});
+		return stub;
+	}
 
-		const result = spawnSync(
-			process.execPath, [cli, 'destroy', '--working-dir', made.consumer, '-auto-approve'],
-			{cwd: made.consumer, encoding: 'utf8'}
-		);
-		const output = `${result.stdout}${result.stderr}`;
-		expect(result.status).to.not.equal(0);
-		// The phrase that only the missing-list refusal produces. Asserting
-		// merely on the attribute name passed even with the check removed,
-		// because the "not allowed for this command" error names it too --
-		// the test could not tell the two apart.
-		expect(output).to.contain('declares mock_outputs without');
-		await fs.rm(made.root, {recursive: true, force: true});
-	});
+	for (const [allowed, how] of [[undefined, 'are left out'], ['[]', 'are an empty list']] as const) {
+		it(`uses mock_outputs for every command when the allowed commands ${how}`, async () => {
+			// Terragrunt reads an absent or empty mock_outputs_allowed_terraform_commands as every command: validate,
+			// render and each command run see the mocks of a dependency that was never applied.
+			const cli = path.resolve('dist/cli.cjs');
+			const made = await workspaceWithUnappliedDependency(
+				dependencyBlock(['  mock_outputs = {', '    answer = "invented"', '  }'], allowed)
+			);
+			const stub = await unappliedTfStub(made.root);
+			const env = {...process.env, TG_TF_PATH: stub};
+
+			const validate = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--working-dir', made.consumer],
+				{cwd: made.consumer, encoding: 'utf8', env});
+			expect(validate.status).to.equal(0, `${validate.stdout}${validate.stderr}`);
+
+			const render = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+				{cwd: made.consumer, encoding: 'utf8', env});
+			expect(render.status).to.equal(0, render.stderr);
+			expect(JSON.parse(render.stdout).inputs.seen).to.equal('invented');
+
+			for (const command of ['plan', 'apply', 'destroy']) {
+				const run = spawnSync(process.execPath, [cli, 'run', '--tf-path', stub, '--working-dir', made.consumer, command],
+					{cwd: made.consumer, encoding: 'utf8', env});
+				expect(run.status).to.equal(0, run.stderr);
+				expect(run.stdout).to.equal(`${command} seen=invented\n`);
+			}
+			await fs.rm(made.root, {recursive: true, force: true});
+		});
+	}
 
 	it('refuses a mock that reads a dependency', async () => {
 		// A mock stands in for a unit that has not been applied, so it cannot

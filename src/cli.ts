@@ -1568,26 +1568,17 @@ class EmptyRenderOutputs extends Map<string, RuntimeValue<ValueType>> {
 /**
  * The mocks a dependency block allows the running command to see.
  *
- * `mock_outputs_allowed_terraform_commands` is not optional in practice and is not defaulted here: terragrunt's own
- * default is every command, which means a mocked value can reach an `apply` and be written to real infrastructure. A
- * unit that wants mocks says which commands may see them.
+ * As in Terragrunt, `mock_outputs_allowed_terraform_commands` narrows the commands that may see the mocks, and a
+ * block that leaves it out, or sets it to an empty list, allows every command.
  *
  * @param request the dependency the evaluator found, with its evaluated mock settings.
  * @param terraformCommand the command being run.
  * @returns the mocked outputs, or undefined when there are none or the command may not see them.
- * @throws Error when the block declares mocks without naming the commands that may see them.
  */
 function allowedMocks(request: DependencyRequest, terraformCommand: string): Map<string, RuntimeValue<ValueType>> | undefined {
 	const mocks = request.mockOutputs?.value as Map<string, RuntimeValue<ValueType>> | undefined;
-	if (mocks !== undefined && request.mockOutputsAllowedTerraformCommands === undefined) {
-		throw new Error(
-			`dependency "${request.name}" in ${request.declaredIn} declares mock_outputs without ` +
-			'mock_outputs_allowed_terraform_commands. Name the commands that may ' +
-			'see invented values -- usually ["destroy", "plan", "validate"] -- so ' +
-			'an apply cannot write one to real infrastructure.'
-		);
-	}
-	if (mocks === undefined || !(request.mockOutputsAllowedTerraformCommands ?? []).includes(terraformCommand)) return undefined;
+	const allowed = request.mockOutputsAllowedTerraformCommands ?? [];
+	if (mocks === undefined || (allowed.length > 0 && !allowed.includes(terraformCommand))) return undefined;
 	return mocks;
 }
 
@@ -1688,7 +1679,7 @@ async function dependencyOutputs(
 		if (absent.length > 0 && terraformCommand !== 'render') {
 			throw new Error(
 				`dependency "${name}" has no ${absent.join(', ')} to read from ${target}, ` +
-				`and its mock_outputs are allowed only for: ${allowed.join(', ') || '(none)'} ` +
+				`and its mock_outputs are allowed only for: ${allowed.join(', ')} ` +
 				`-- not ${terraformCommand || '(no command)'}.\n` +
 				'Apply that unit, or add this command to ' +
 				'mock_outputs_allowed_terraform_commands if an invented value is ' +
