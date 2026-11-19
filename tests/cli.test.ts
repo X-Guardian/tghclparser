@@ -1547,7 +1547,7 @@ describe('CLI dependency graph', function () {
 	// itself. A graph is a set of nodes and edges, so neither may appear
 	// more than once and none may point at itself.
 	it('declares each unit once and never draws an edge to itself', async () => {
-		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-dag-'));
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-dag-')));
 		for (const unit of ['base', 'left', 'right', 'top']) {
 			await fs.mkdir(path.join(root, unit), {recursive: true});
 		}
@@ -1567,23 +1567,19 @@ describe('CLI dependency graph', function () {
 		const cli = path.resolve('dist/cli.cjs');
 		const result = spawnSync(process.execPath, [cli, 'dag', 'graph', '--working-dir', root], {encoding: 'utf8'});
 		expect(result.status, result.stderr).to.equal(0);
-
-		const lines = result.stdout.split('\n').map(line => line.trim()).filter(Boolean);
-		const declarations = lines.filter(line => !line.includes('->') && line.endsWith(';'));
-		const edges = lines.filter(line => line.includes('->'));
-
-		expect(new Set(declarations).size).to.equal(declarations.length);
-		expect(new Set(edges).size).to.equal(edges.length);
-		for (const edge of edges) {
-			const [from, to] = edge.split('->').map(side => side.replace(/;$/, '').trim());
-			expect(from, `self-edge: ${edge}`).to.not.equal(to);
-		}
-
-		// The diamond is still described: both sides reach base.
-		const named = (unit: string) => edges.some(edge => edge.includes(`${path.sep}${unit}"`));
-		expect(named('base'), result.stdout).to.equal(true);
-		expect(named('left'), result.stdout).to.equal(true);
-		expect(named('right'), result.stdout).to.equal(true);
+		// Each unit is declared once, with each of its edges once, and the diamond is still described.
+		expect(result.stdout).to.equal(
+			'digraph {\n' +
+			'\t"base" ;\n' +
+			'\t"left" ;\n' +
+			'\t"left" -> "base";\n' +
+			'\t"right" ;\n' +
+			'\t"right" -> "base";\n' +
+			'\t"top" ;\n' +
+			'\t"top" -> "left";\n' +
+			'\t"top" -> "right";\n' +
+			'}\n'
+		);
 
 		await fs.rm(root, {recursive: true, force: true});
 	});
