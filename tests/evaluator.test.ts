@@ -442,7 +442,7 @@ describe('semantic configuration evaluation', () => {
 			assert.equal(await failure('max()'), 'must pass at least one number');
 			assert.equal(await failure('min()'), 'must pass at least one number');
 			for (const name of ['setunion', 'setintersection']) {
-				assert.equal(await failure(`${name}()`), `Not enough function arguments: Function "${name}" expects at least 1 argument(s). Missing value for "first_set".`);
+				assert.equal(await failure(`${name}()`), `Not enough function arguments; Function "${name}" expects at least 1 argument(s). Missing value for "first_set".`);
 			}
 			assert.deepEqual(await render('concat(["a"])'), ['a']);
 			assert.equal(await render('max(1)'), 1);
