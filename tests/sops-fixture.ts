@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 
 /** A sops YAML file as sops writes it: the keys in clear, every value encrypted, and its own metadata at the end. */
@@ -40,6 +41,25 @@ const SOPS_WITHOUT_KEY = path.resolve('tests/fixtures/sops-without-key');
 export async function withoutSopsKey<T>(work: () => Promise<T>): Promise<T> {
 	const previous = process.env.PATH;
 	process.env.PATH = `${SOPS_WITHOUT_KEY}${path.delimiter}${previous ?? ''}`;
+	try {
+		return await work();
+	} finally {
+		process.env.PATH = previous;
+	}
+}
+
+/**
+ * Runs `work` with no `sops` anywhere on `PATH`, as on a machine where it was never installed.
+ *
+ * @param directory a directory the empty `PATH` folder can be made under.
+ * @param work what to run while `PATH` holds only that folder.
+ * @returns whatever `work` returns.
+ */
+export async function withoutSops<T>(directory: string, work: () => Promise<T>): Promise<T> {
+	const bin = path.join(directory, 'empty-bin');
+	await fs.mkdir(bin, { recursive: true });
+	const previous = process.env.PATH;
+	process.env.PATH = bin;
 	try {
 		return await work();
 	} finally {
