@@ -130,6 +130,76 @@ describe('function calls as Terragrunt evaluates them', () => {
 		});
 	});
 
+	describe('sort', () => {
+		it('orders strings by their bytes', async () => {
+			assert.deepEqual(
+				await value('sort(["b", "B", "a", "￿", "😀", "10", "9", "é", "e", "Z", "_", " ", "ab", "a"])'),
+				[' ', '10', '9', 'B', 'Z', '_', 'a', 'a', 'ab', 'b', 'e', 'é', '￿', '😀']
+			);
+			assert.deepEqual(
+				await value('sort(["b", "B", "a", "😀", "", "ｚ", "10", "9", "é", "e"])'),
+				['', '10', '9', 'B', 'a', 'b', 'e', 'é', 'ｚ', '😀']
+			);
+			assert.deepEqual(await value('sort(toset(["b", "a", "B"]))'), ['B', 'a', 'b']);
+			assert.deepEqual(await value('sort([])'), []);
+		});
+
+		it('sorts numbers and bools as the strings they convert to', async () => {
+			assert.deepEqual(
+				await value('sort([10, 9, 1, 2.5, -1, 100, 0.5, 1e21, -0, 0.1])'),
+				['-0', '-1', '0.1', '0.5', '1', '10', '100', '1000000000000000000000', '2.5', '9']
+			);
+			assert.deepEqual(await value('sort(tolist([3, 1, 20, 2]))'), ['1', '2', '20', '3']);
+			assert.deepEqual(await value('sort(toset([3, 1, 20, 2]))'), ['1', '2', '20', '3']);
+			assert.deepEqual(await value('sort([true, "a", 1, false, "B"])'), ['1', 'B', 'a', 'false', 'true']);
+		});
+
+		it('refuses a list it cannot convert to a list of strings', async () => {
+			const calls: Array<[string, string]> = [
+				['sort(null)', 'argument must not be null.'],
+				['sort("a")', 'list of string required, but have string.'],
+				['sort(1)', 'list of string required, but have number.'],
+				['sort(true)', 'list of string required, but have bool.'],
+				['sort({ a = 1 })', 'list of string required.'],
+				['sort([1, [2]])', 'element 1: string required, but have tuple.'],
+				['sort(["a", { b = 1 }])', 'element 1: string required, but have object.'],
+				['sort([[1], null])', 'element 0: string required, but have tuple.'],
+				['sort([null, [1]])', 'element 1: string required, but have tuple.']
+			];
+			for (const [call, message] of calls) assert.equal(await failure(call), `Invalid function argument; Invalid value for "list" parameter: ${message}`, call);
+		});
+
+		it('refuses a null element', async () => {
+			assert.equal(await failure('sort(["b", null])'), 'given list element 1 is null; a null string cannot be sorted.');
+			assert.equal(await failure('sort([1, null, 2])'), 'given list element 1 is null; a null string cannot be sorted.');
+			assert.equal(await failure('sort([null])'), 'given list element 0 is null; a null string cannot be sorted.');
+		});
+	});
+
+	describe('sets', () => {
+		it('hold strings in the order of their bytes and numbers by value', async () => {
+			assert.deepEqual(await value('toset(["b", "B", "a", "é", "e", "😀", "ｚ", "10", "9"])'), ['10', '9', 'B', 'a', 'b', 'e', 'é', 'ｚ', '😀']);
+			assert.deepEqual(await value('setunion(["b", "é"], ["B", "a", "10", "9"])'), ['10', '9', 'B', 'a', 'b', 'é']);
+			assert.deepEqual(await value('setintersection(["b", "B", "a", "é"], ["é", "a", "B", "b"])'), ['B', 'a', 'b', 'é']);
+			assert.deepEqual(await value('setsubtract(["b", "B", "a", "é", "x"], ["x"])'), ['B', 'a', 'b', 'é']);
+			assert.deepEqual(await value('toset([10, 9, 1, 2.5])'), [1, 2.5, 9, 10]);
+		});
+	});
+
+	describe('yamlencode', () => {
+		it('orders object and map keys by their bytes', async () => {
+			assert.equal(
+				await value('yamlencode({ "b" = 1, "B" = 2, "a" = 3, "10" = 6, "9" = 7, "é" = 8, "e" = 9, "_" = 10, "Z" = 11, "中" = 12, "ｚ" = 13 })'),
+				'"10": 6\n"9": 7\n"B": 2\n"Z": 11\n"_": 10\n"a": 3\n"b": 1\n"e": 9\n"é": 8\n"中": 12\n"ｚ": 13\n'
+			);
+			assert.equal(await value('yamlencode(tomap({ "b" = 1, "B" = 2, "10" = 6, "9" = 7 }))'), '"10": 6\n"9": 7\n"B": 2\n"b": 1\n');
+			assert.equal(
+				await value('yamlencode({ outer = { "z" = 1, "Y" = 2, "y" = 3 }, "Outer" = { "b" = 1, "A" = 2 } })'),
+				'"Outer":\n  "A": 2\n  "b": 1\n"outer":\n  "Y": 2\n  "y": 3\n  "z": 1\n'
+			);
+		});
+	});
+
 	describe('keys, values and for expressions', () => {
 		it('take an object\'s keys in the order of their bytes', async () => {
 			const object = '{ "b" = 1, "B" = 2, "a" = 3, "￿" = 4, "😀" = 5, "10" = 6, "9" = 7 }';

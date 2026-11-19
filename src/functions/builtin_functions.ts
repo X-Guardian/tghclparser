@@ -96,15 +96,63 @@ function valueEquals(left: RuntimeValue<ValueType>, right: RuntimeValue<ValueTyp
 	return false;
 }
 
+/** A set's elements in go-cty's order: numbers by value, strings by their bytes. */
 function sortRuntimeList(items: RuntimeValue<ValueType>[]): RuntimeValue<ValueType>[] {
 	const allNumbers = items.every(item => item.type === 'number');
 	const sorted = [...items];
 	if (allNumbers) {
 		sorted.sort((left, right) => Number(left.value) - Number(right.value));
 	} else {
-		sorted.sort((left, right) => String(left.value).localeCompare(String(right.value)));
+		sorted.sort((left, right) => compareStrings(String(left.value), String(right.value)));
 	}
 	return sorted;
+}
+
+/**
+ * go-cty's sort, whose parameter is a list of strings: each element is converted to a string, a number written in
+ * full and a bool as true or false, and the strings are ordered by their bytes. A value that does not convert is
+ * refused as go-cty refuses it, before a null element is.
+ */
+function sortStrings(argument: RuntimeValue<ValueType>): RuntimeValue<'array'> {
+	const invalid = (detail: string) => new Error(`Invalid function argument; Invalid value for "list" parameter: ${detail}`);
+	switch (argument.type) {
+		case 'array':
+			break;
+		case 'null':
+			throw invalid('argument must not be null.');
+		case 'object':
+		case 'block':
+			throw invalid('list of string required.');
+		case 'string':
+		case 'number':
+			throw invalid(`list of string required, but have ${argument.type}.`);
+		case 'boolean':
+			throw invalid('list of string required, but have bool.');
+		default:
+			throw new Error(`sort cannot convert ${argument.type} to a list of strings`);
+	}
+	const strings = (argument.value as RuntimeValue<ValueType>[]).map((item, index) => {
+		switch (item.type) {
+			case 'string':
+				return String(item.value);
+			case 'number':
+				return jsonNumber(Number(item.value));
+			case 'boolean':
+				return item.value ? 'true' : 'false';
+			case 'null':
+				return null;
+			case 'array':
+				throw invalid(`element ${index}: string required, but have tuple.`);
+			case 'object':
+			case 'block':
+				throw invalid(`element ${index}: string required, but have object.`);
+			default:
+				throw new Error(`sort cannot convert element ${index} of type ${item.type} to a string`);
+		}
+	});
+	const nullIndex = strings.indexOf(null);
+	if (nullIndex !== -1) throw new Error(`given list element ${nullIndex} is null; a null string cannot be sorted.`);
+	return arrayValue((strings as string[]).sort(compareStrings).map(stringValue));
 }
 
 function escapeRegExp(text: string): string {
@@ -289,7 +337,7 @@ function yamlEncode(value: RuntimeValue<ValueType>, indent = ''): string {
 		}).join('\n');
 	}
 	if (current.type === 'object' || current.type === 'block') {
-		const entries = [...(current.value as Map<string, RuntimeValue<ValueType>>).entries()].sort(([left], [right]) => left.localeCompare(right));
+		const entries = [...(current.value as Map<string, RuntimeValue<ValueType>>).entries()].sort(([left], [right]) => compareStrings(left, right));
 		if (entries.length === 0) return '{}';
 		return entries.map(([key, item]) => {
 			const rendered = yamlEncode(item, `${indent}  `);
@@ -669,7 +717,7 @@ export const builtinFunctionGroup = {
 			const end = wholeNumberArgument(args, 2, 'slice', 'invalid end index');
 			return arrayValue(items.slice(start, end));
 		},
-		sort: async (args: RuntimeValue<ValueType>[]) => arrayValue(sortRuntimeList(arrayArgument(args, 0, 'sort'))),
+		sort: async (args: RuntimeValue<ValueType>[]) => sortStrings(requireArgument(args, 0, 'sort')),
 		split: async (args: RuntimeValue<ValueType>[]) => arrayValue(stringArgument(args, 1, 'split').split(stringArgument(args, 0, 'split')).map(stringValue)),
 		startswith: async (args: RuntimeValue<ValueType>[]) => booleanValue(stringArgument(args, 0, 'startswith').startsWith(stringArgument(args, 1, 'startswith'))),
 		strcontains: async (args: RuntimeValue<ValueType>[]) => booleanValue(stringArgument(args, 0, 'strcontains').includes(stringArgument(args, 1, 'strcontains'))),
