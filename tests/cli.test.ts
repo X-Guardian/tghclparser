@@ -32,6 +32,69 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(root, {recursive: true, force: true});
 	});
 
+	it('names a dag graph\'s units and dependencies as Terragrunt does through symlinked folders', async () => {
+		// Terragrunt names a unit by the path it walked to it and a dependency by
+		// its config_path with symlinks resolved, both relative to the working
+		// directory as given. It lists the units it discovered, not the files they
+		// include, the dependencies outside the working directory, or the folder a
+		// dependency was reached through, and a stack's components are not its
+		// dependencies.
+		const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-dag-')));
+		const live = path.join(base, 'real', 'live');
+		for (const unit of ['a', 'b', 'd', 'st']) await fs.mkdir(path.join(live, unit), {recursive: true});
+		await fs.writeFile(path.join(live, 'st', 'terragrunt.stack.hcl'), 'unit "u" {\n  source = "../../ext/c"\n  path = "u"\n}\n');
+		await fs.mkdir(path.join(base, 'real', 'ext', 'c'), {recursive: true});
+		await fs.symlink('real', path.join(base, 'link'));
+		await fs.symlink('b', path.join(live, 'b-link'));
+		await fs.writeFile(path.join(live, 'root.hcl'), 'locals { region = "eu" }\n');
+		await fs.writeFile(path.join(live, 'a', 'terragrunt.hcl'), [
+			'include "root" {',
+			'  path = find_in_parent_folders("root.hcl")',
+			'}',
+			'dependency "b" {',
+			'  config_path = "../b"',
+			'}',
+			'dependency "c" {',
+			'  config_path = "../../ext/c"',
+			'}',
+			''
+		].join('\n'));
+		await fs.writeFile(path.join(live, 'b', 'terragrunt.hcl'), 'inputs = {}\n');
+		await fs.writeFile(path.join(live, 'd', 'terragrunt.hcl'), 'dependency "b" {\n  config_path = "../b-link"\n}\n');
+		await fs.writeFile(path.join(base, 'real', 'ext', 'c', 'terragrunt.hcl'), 'inputs = {}\n');
+		const cli = path.resolve('dist/cli.cjs');
+		const graph = (workingDir: string): string => {
+			const run = spawnSync(process.execPath, [cli, 'dag', 'graph', '--working-dir', workingDir], {encoding: 'utf8'});
+			expect(run.status, run.stderr).to.equal(0);
+			return run.stdout;
+		};
+		expect(graph(live)).to.equal([
+			'digraph {',
+			'\t"a" ;',
+			'\t"a" -> "../ext/c";',
+			'\t"a" -> "b";',
+			'\t"b" ;',
+			'\t"d" ;',
+			'\t"d" -> "b";',
+			'\t"st" ;',
+			'}',
+			''
+		].join('\n'));
+		expect(graph(path.join(base, 'link', 'live'))).to.equal([
+			'digraph {',
+			'\t"a" ;',
+			'\t"a" -> "../../real/ext/c";',
+			'\t"a" -> "../../real/live/b";',
+			'\t"b" ;',
+			'\t"d" ;',
+			'\t"d" -> "../../real/live/b";',
+			'\t"st" ;',
+			'}',
+			''
+		].join('\n'));
+		await fs.rm(base, {recursive: true, force: true});
+	});
+
 	it('generates a local stack component and evaluated values file', async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-stack-'));
 		await fs.mkdir(path.join(root, 'modules', 'app'), {recursive: true});
@@ -864,29 +927,47 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
-	it('refuses mock_outputs that do not say which commands may see them', async () => {
-		// Terragrunt's default for an omitted list is every command, so a
-		// mocked value can reach an apply. That default is not carried here: a
-		// unit that wants mocks names the commands, and one that does not is
-		// stopped rather than given the most permissive reading.
-		const cli = path.resolve('dist/cli.cjs');
-		const made = await workspaceWithUnappliedDependency(
-			dependencyBlock(['  mock_outputs = {', '    answer = "invented"', '  }'])
-		);
+	// An executable that answers `output -json` as for a dependency that was never applied, and otherwise prints the
+	// command it ran with the input the unit passed it, so a run shows which value reached OpenTofu.
+	async function unappliedTfStub(root: string): Promise<string> {
+		const stub = path.join(root, 'tf-stub');
+		await fs.writeFile(stub, [
+			'#!/bin/sh',
+			'if [ "$1" = output ]; then echo "{}"; exit 0; fi',
+			'echo "$1 seen=$TF_VAR_seen"'
+		].join('\n'), {mode: 0o755});
+		return stub;
+	}
 
-		const result = spawnSync(
-			process.execPath, [cli, 'destroy', '--working-dir', made.consumer, '-auto-approve'],
-			{cwd: made.consumer, encoding: 'utf8'}
-		);
-		const output = `${result.stdout}${result.stderr}`;
-		expect(result.status).to.not.equal(0);
-		// The phrase that only the missing-list refusal produces. Asserting
-		// merely on the attribute name passed even with the check removed,
-		// because the "not allowed for this command" error names it too --
-		// the test could not tell the two apart.
-		expect(output).to.contain('declares mock_outputs without');
-		await fs.rm(made.root, {recursive: true, force: true});
-	});
+	for (const [allowed, how] of [[undefined, 'are left out'], ['[]', 'are an empty list']] as const) {
+		it(`uses mock_outputs for every command when the allowed commands ${how}`, async () => {
+			// Terragrunt reads an absent or empty mock_outputs_allowed_terraform_commands as every command: validate,
+			// render and each command run see the mocks of a dependency that was never applied.
+			const cli = path.resolve('dist/cli.cjs');
+			const made = await workspaceWithUnappliedDependency(
+				dependencyBlock(['  mock_outputs = {', '    answer = "invented"', '  }'], allowed)
+			);
+			const stub = await unappliedTfStub(made.root);
+			const env = {...process.env, TG_TF_PATH: stub};
+
+			const validate = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--working-dir', made.consumer],
+				{cwd: made.consumer, encoding: 'utf8', env});
+			expect(validate.status).to.equal(0, `${validate.stdout}${validate.stderr}`);
+
+			const render = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
+				{cwd: made.consumer, encoding: 'utf8', env});
+			expect(render.status).to.equal(0, render.stderr);
+			expect(JSON.parse(render.stdout).inputs.seen).to.equal('invented');
+
+			for (const command of ['plan', 'apply', 'destroy']) {
+				const run = spawnSync(process.execPath, [cli, 'run', '--tf-path', stub, '--working-dir', made.consumer, command],
+					{cwd: made.consumer, encoding: 'utf8', env});
+				expect(run.status).to.equal(0, run.stderr);
+				expect(run.stdout).to.equal(`${command} seen=invented\n`);
+			}
+			await fs.rm(made.root, {recursive: true, force: true});
+		});
+	}
 
 	it('refuses a mock that reads a dependency', async () => {
 		// A mock stands in for a unit that has not been applied, so it cannot
@@ -986,7 +1067,7 @@ describe('CLI configuration discovery', function () {
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
-	it('keeps an unresolved output visible through a local alias', async () => {
+	it('refuses to render a local that aliases a dependency\'s outputs, as Terragrunt does', async () => {
 		const cli = path.resolve('dist/cli.cjs');
 		const body = dependencyBlock([]);
 		body.splice(body.indexOf('inputs = {'), 0,
@@ -997,9 +1078,9 @@ describe('CLI configuration discovery', function () {
 		const made = await workspaceWithUnappliedDependency(body);
 		const result = spawnSync(process.execPath, [cli, 'render', '--json', '--working-dir', made.consumer],
 			{cwd: made.consumer, encoding: 'utf8'});
-		expect(result.status).to.equal(2, result.stderr);
-		expect(JSON.parse(result.stdout).inputs).to.not.have.property('seen');
-		expect(result.stderr).to.contain('unresolved inputs.seen');
+		expect(result.status).to.equal(1, result.stderr);
+		expect(result.stdout).to.equal('');
+		expect(result.stderr).to.contain('Locals can only reference these variables: local, include, feature, values. This expression references "dependency".');
 		await fs.rm(made.root, {recursive: true, force: true});
 	});
 
@@ -1484,7 +1565,7 @@ describe('CLI dependency graph', function () {
 	// itself. A graph is a set of nodes and edges, so neither may appear
 	// more than once and none may point at itself.
 	it('declares each unit once and never draws an edge to itself', async () => {
-		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-dag-'));
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-dag-')));
 		for (const unit of ['base', 'left', 'right', 'top']) {
 			await fs.mkdir(path.join(root, unit), {recursive: true});
 		}
@@ -1504,23 +1585,19 @@ describe('CLI dependency graph', function () {
 		const cli = path.resolve('dist/cli.cjs');
 		const result = spawnSync(process.execPath, [cli, 'dag', 'graph', '--working-dir', root], {encoding: 'utf8'});
 		expect(result.status, result.stderr).to.equal(0);
-
-		const lines = result.stdout.split('\n').map(line => line.trim()).filter(Boolean);
-		const declarations = lines.filter(line => !line.includes('->') && line.endsWith(';'));
-		const edges = lines.filter(line => line.includes('->'));
-
-		expect(new Set(declarations).size).to.equal(declarations.length);
-		expect(new Set(edges).size).to.equal(edges.length);
-		for (const edge of edges) {
-			const [from, to] = edge.split('->').map(side => side.replace(/;$/, '').trim());
-			expect(from, `self-edge: ${edge}`).to.not.equal(to);
-		}
-
-		// The diamond is still described: both sides reach base.
-		const named = (unit: string) => edges.some(edge => edge.includes(`${path.sep}${unit}"`));
-		expect(named('base'), result.stdout).to.equal(true);
-		expect(named('left'), result.stdout).to.equal(true);
-		expect(named('right'), result.stdout).to.equal(true);
+		// Each unit is declared once, with each of its edges once, and the diamond is still described.
+		expect(result.stdout).to.equal(
+			'digraph {\n' +
+			'\t"base" ;\n' +
+			'\t"left" ;\n' +
+			'\t"left" -> "base";\n' +
+			'\t"right" ;\n' +
+			'\t"right" -> "base";\n' +
+			'\t"top" ;\n' +
+			'\t"top" -> "left";\n' +
+			'\t"top" -> "right";\n' +
+			'}\n'
+		);
 
 		await fs.rm(root, {recursive: true, force: true});
 	});

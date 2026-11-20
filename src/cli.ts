@@ -6,6 +6,7 @@ import {spawnSync} from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { URI } from 'vscode-uri';
 
 import { DiagnosticSeverity } from 'vscode-languageserver';
 
@@ -701,51 +702,46 @@ function printList(configs: DiscoveredConfig[], options: CLIOptions): void {
 		return;
 	}
 	if (format !== 'dot') throw new Error(`Unsupported list format ${format}`);
+	printDot(configs.map(config => ({path: config.path, dependencies: []})));
+}
+
+interface GraphComponent {
+	path: string;
+	dependencies: string[];
+}
+
+/** Writes components as Terragrunt's DOT renderer does: sorted by path, each followed by its edges. */
+function printDot(components: GraphComponent[]): void {
+	const byPath = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
 	process.stdout.write('digraph {\n');
-	for (const config of configs) process.stdout.write(`\t${JSON.stringify(config.path)} ;\n`);
+	for (const component of [...components].sort((a, b) => byPath(a.path, b.path))) {
+		process.stdout.write(`\t"${component.path}" ;\n`);
+		for (const dependency of [...component.dependencies].sort(byPath)) process.stdout.write(`\t"${component.path}" -> "${dependency}";\n`);
+	}
 	process.stdout.write('}\n');
 }
 
-async function printDependencyGraph(workingDir: string): Promise<void> {
+/**
+ * Prints the discovered units and their dependencies the way Terragrunt's `dag graph` names them. Terragrunt names
+ * a unit by the path it walked to it and a dependency by its config_path with symlinks resolved, each relative to
+ * the working directory as given, so a dependency reached through a symlinked folder is the unit it resolves to.
+ * Only the discovered units and stacks are listed: neither the files they include nor a dependency outside the
+ * working directory is a node. Only a unit has dependency edges; a stack's components are not its dependencies.
+ */
+async function printDependencyGraph(workingDir: string, configs: DiscoveredConfig[]): Promise<void> {
 	const workspace = new Workspace();
 	workspace.setWorkspaceRoot(pathToFileURL(workingDir).toString());
-	const root = await workspace.refreshDependencyTree();
-	if (!root) throw new Error(`Unable to construct a configuration graph under ${workingDir}`);
-	const nodes: Array<{name: string; parent?: string}> = [];
-	const visit = (node: any, parent?: string): void => {
-		const fullPath = fileURLToPath(node.data.uri);
-		const configDir = node.type === 'workspace'
-			? undefined
-			: path.basename(fullPath).startsWith('terragrunt.')
-				? path.dirname(fullPath)
-				: fsSync.existsSync(path.join(fullPath, 'terragrunt.hcl')) ? fullPath : path.dirname(fullPath);
-		const name = configDir ? path.resolve(configDir) : undefined;
-		if (name) nodes.push({name, parent});
-		for (const child of node.children ?? []) visit(child, name);
-	};
-	visit(root);
-	// The tree is walked per path, not per node, so a unit reachable through
-	// more than one parent -- every unit that depends on `global`, say -- is
-	// pushed once per route and its edges repeat. A directory that resolves to
-	// the same config as its parent also produces an edge to itself. Both make
-	// the graph unreadable and neither says anything: dedupe, and drop the
-	// self-edges.
-	const declared = new Set<string>();
-	const edges = new Set<string>();
-	process.stdout.write('digraph {\n');
-	for (const node of nodes) {
-		if (declared.has(node.name)) continue;
-		declared.add(node.name);
-		process.stdout.write(`\t${JSON.stringify(node.name)} ;\n`);
-	}
-	for (const node of nodes) {
-		if (!node.parent || node.parent === node.name) continue;
-		const edge = `\t${JSON.stringify(node.parent)} -> ${JSON.stringify(node.name)} ;\n`;
-		if (edges.has(edge)) continue;
-		edges.add(edge);
-		process.stdout.write(edge);
-	}
-	process.stdout.write('}\n');
+	if (!await workspace.refreshDependencyTree()) throw new Error(`Unable to construct a configuration graph under ${workingDir}`);
+	const components = await Promise.all(configs.map(async config => {
+		if (config.type === 'stack') return {path: config.path, dependencies: []};
+		const relationships = workspace.getRelationships(URI.file(config.absPath).toString());
+		if (!relationships) throw new Error(`Discovered configuration ${config.absPath} is missing from the configuration graph`);
+		const dependencies = await Promise.all(relationships.dependencies.map(async uri =>
+			path.relative(workingDir, await fs.realpath(path.dirname(URI.parse(uri).fsPath)))
+		));
+		return {path: config.path, dependencies: [...new Set(dependencies)]};
+	}));
+	printDot(components);
 }
 
 function printInfo(command: string, workingDir: string): void {
@@ -1572,26 +1568,17 @@ class EmptyRenderOutputs extends Map<string, RuntimeValue<ValueType>> {
 /**
  * The mocks a dependency block allows the running command to see.
  *
- * `mock_outputs_allowed_terraform_commands` is not optional in practice and is not defaulted here: terragrunt's own
- * default is every command, which means a mocked value can reach an `apply` and be written to real infrastructure. A
- * unit that wants mocks says which commands may see them.
+ * As in Terragrunt, `mock_outputs_allowed_terraform_commands` narrows the commands that may see the mocks, and a
+ * block that leaves it out, or sets it to an empty list, allows every command.
  *
  * @param request the dependency the evaluator found, with its evaluated mock settings.
  * @param terraformCommand the command being run.
  * @returns the mocked outputs, or undefined when there are none or the command may not see them.
- * @throws Error when the block declares mocks without naming the commands that may see them.
  */
 function allowedMocks(request: DependencyRequest, terraformCommand: string): Map<string, RuntimeValue<ValueType>> | undefined {
 	const mocks = request.mockOutputs?.value as Map<string, RuntimeValue<ValueType>> | undefined;
-	if (mocks !== undefined && request.mockOutputsAllowedTerraformCommands === undefined) {
-		throw new Error(
-			`dependency "${request.name}" in ${request.declaredIn} declares mock_outputs without ` +
-			'mock_outputs_allowed_terraform_commands. Name the commands that may ' +
-			'see invented values -- usually ["destroy", "plan", "validate"] -- so ' +
-			'an apply cannot write one to real infrastructure.'
-		);
-	}
-	if (mocks === undefined || !(request.mockOutputsAllowedTerraformCommands ?? []).includes(terraformCommand)) return undefined;
+	const allowed = request.mockOutputsAllowedTerraformCommands ?? [];
+	if (mocks === undefined || (allowed.length > 0 && !allowed.includes(terraformCommand))) return undefined;
 	return mocks;
 }
 
@@ -1692,7 +1679,7 @@ async function dependencyOutputs(
 		if (absent.length > 0 && terraformCommand !== 'render') {
 			throw new Error(
 				`dependency "${name}" has no ${absent.join(', ')} to read from ${target}, ` +
-				`and its mock_outputs are allowed only for: ${allowed.join(', ') || '(none)'} ` +
+				`and its mock_outputs are allowed only for: ${allowed.join(', ')} ` +
 				`-- not ${terraformCommand || '(no command)'}.\n` +
 				'Apply that unit, or add this command to ' +
 				'mock_outputs_allowed_terraform_commands if an invented value is ' +
@@ -2589,7 +2576,7 @@ async function main(argv: string[]): Promise<number> {
 		const configs = (await Promise.all(roots.map(root => discoverConfigs(root, parsed.noHidden, parsed.workingDir)))).flat().sort((a, b) => a.path.localeCompare(b.path) || a.type.localeCompare(b.type));
 		if (configs.length === 0) throw new Error(`No Terragrunt configurations found under ${parsed.workingDir}`);
 		if (command === 'find') printFind(configs, parsed);
-		else if (parsed.dependencies && parsed.format === 'dot') await printDependencyGraph(parsed.workingDir);
+		else if (parsed.dependencies && parsed.format === 'dot') await printDependencyGraph(parsed.workingDir, configs);
 		else printList(configs, parsed);
 		return 0;
 	}
@@ -2598,7 +2585,7 @@ async function main(argv: string[]): Promise<number> {
 		const parsed = parseArgs(argv.slice(2));
 		if (parsed === 'help') { console.log(discoveryUsage('dag graph')); return 0; }
 		if (parsed.dependencies && parsed.format && parsed.format !== 'dot') throw new Error('--dependencies is only supported with DOT output');
-		await printDependencyGraph(parsed.workingDir);
+		await printDependencyGraph(parsed.workingDir, await discoverConfigs(parsed.workingDir, parsed.noHidden));
 		return 0;
 	}
 	if (argv[0] === 'info') {

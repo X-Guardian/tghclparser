@@ -4,7 +4,7 @@ import { gunzipSync } from 'node:zlib';
 import path from 'node:path';
 
 import { ConfigEvaluator, runtimeValueToPlain } from '../src/Evaluator';
-import { ENCRYPTED_SOPS_JSON, ENCRYPTED_SOPS_YAML, withoutSopsKey } from './sops-fixture';
+import { ENCRYPTED_SOPS_JSON, ENCRYPTED_SOPS_YAML, withoutSops, withoutSopsKey } from './sops-fixture';
 
 describe('semantic configuration evaluation', () => {
 	const evaluator = new ConfigEvaluator({
@@ -145,6 +145,204 @@ describe('semantic configuration evaluation', () => {
 		it('lets a variable shadow a namespace of the same name', async () => {
 			assert.deepEqual(await forInputs('[for local in [{ provider = "x" }] : local.provider]'), ['x']);
 		});
+
+		it('takes the strings "1" and "0" as a condition, as HCL converts them', async () => {
+			assert.deepEqual(await forInputs('[for v in [1, 2] : v if v > 1 ? "1" : "0"]'), [2]);
+		});
+	});
+
+	describe('bool operands and conditions', () => {
+		const evaluate = (expression: string) => evaluator.evaluateUnit(configPath, `inputs = {\n  x = ${expression}\n}\n`, process.cwd());
+		const value = async (expression: string): Promise<unknown> => {
+			const result = await evaluate(expression);
+			assert.equal(result.error, undefined, expression);
+			return (runtimeValueToPlain(result.inputs!) as Record<string, unknown>).x;
+		};
+		/** The one fault an expression has, and the columns of line 2 it is written at. */
+		const fault = async (expression: string): Promise<[string, number, number]> => {
+			const result = await evaluate(expression);
+			assert.equal(result.valid, false, expression);
+			assert.equal(result.unresolved, undefined, expression);
+			assert.equal(result.problems?.length, 1, `${expression}: ${result.error}`);
+			const [problem] = result.problems!;
+			assert.equal(problem.range.start.line, 1, expression);
+			return [problem.message, problem.range.start.character, problem.range.end.character];
+		};
+
+		it('takes a bool, and the strings HCL converts to one', async () => {
+			assert.equal(await value('true && "true"'), true);
+			assert.equal(await value('"1" && true'), true);
+			assert.equal(await value('!"0"'), true);
+			assert.equal(await value('"false" || "0"'), false);
+			assert.equal(await value('"1" ? "a" : "b"'), 'a');
+			assert.equal(await value('"0" ? "a" : "b"'), 'b');
+		});
+
+		it('takes null in && and || where the other side decides, as HCL does', async () => {
+			assert.equal(await value('null && true'), false);
+			assert.equal(await value('true && null'), false);
+			assert.equal(await value('null || true'), true);
+		});
+
+		it('drops a fault on the side that && or || does not need, as HCL does', async () => {
+			assert.equal(await value('false && local.nope'), false);
+			assert.equal(await value('local.nope && false'), false);
+			assert.equal(await value('true || local.nope'), true);
+			assert.match((await fault('true && local.nope'))[0], /Undefined local value "nope"/);
+		});
+
+		it('refuses an operand that is not a bool, where the operand is written', async () => {
+			assert.deepEqual(await fault('1 && true'), ['Unsuitable value for left operand: bool required, but have number.', 6, 7]);
+			assert.deepEqual(await fault('true || 0'), ['Unsuitable value for right operand: bool required, but have number.', 14, 15]);
+			assert.deepEqual(await fault('!1'), ['Unsuitable value for unary operand: bool required, but have number.', 7, 8]);
+			assert.deepEqual(await fault('"x" && true'), ['Unsuitable value for left operand: a bool is required.', 6, 9]);
+			assert.deepEqual(await fault('"TRUE" && true'), ['Unsuitable value for left operand: a bool is required; to convert from string, use lowercase "true".', 6, 12]);
+			assert.deepEqual(await fault('[] && true'), ['Unsuitable value for left operand: bool required, but have tuple.', 6, 8]);
+			assert.deepEqual(await fault('{} || false'), ['Unsuitable value for left operand: bool required, but have object.', 6, 8]);
+		});
+
+		it('refuses an operand that is not a bool even when the other side decides', async () => {
+			assert.deepEqual(await fault('false && 1'), ['Unsuitable value for right operand: bool required, but have number.', 15, 16]);
+			assert.deepEqual(await fault('true || 1'), ['Unsuitable value for right operand: bool required, but have number.', 14, 15]);
+		});
+
+		it('refuses both operands when neither is a bool', async () => {
+			const result = await evaluate('1 && "x"');
+			assert.deepEqual(result.problems?.map(problem => problem.message), [
+				'Unsuitable value for left operand: bool required, but have number.',
+				'Unsuitable value for right operand: a bool is required.'
+			]);
+		});
+
+		it('refuses null where nothing else decides', async () => {
+			assert.deepEqual(await fault('!null'), ['Error during operation: argument must not be null.', 6, 11]);
+			assert.deepEqual(await fault('null || false'), ['Error during operation: argument must not be null.', 6, 19]);
+		});
+
+		it('refuses a condition that is not a bool, or is null, where the condition is written', async () => {
+			assert.deepEqual(await fault('1 ? "a" : "b"'), ['The condition expression must be of type bool.', 6, 7]);
+			assert.deepEqual(await fault('"x" ? "a" : "b"'), ['The condition expression must be of type bool.', 6, 9]);
+			assert.deepEqual(await fault('"False" ? "a" : "b"'), ['The condition expression must be of type bool.', 6, 13]);
+			assert.deepEqual(await fault('[true] ? "a" : "b"'), ['The condition expression must be of type bool.', 6, 12]);
+			assert.deepEqual(await fault('null ? "a" : "b"'), ['The condition value is null. Conditions must either be true or false.', 6, 10]);
+		});
+
+		describe('in a template', () => {
+			let dir: string;
+			before(async () => {
+				const os = await import('node:os');
+				const fs = await import('node:fs/promises');
+				dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tghclparser-template-bool-')));
+			});
+			after(async () => {
+				const fs = await import('node:fs/promises');
+				await fs.rm(dir, { recursive: true, force: true });
+			});
+			const render = async (template: string) => {
+				const fs = await import('node:fs/promises');
+				await fs.writeFile(path.join(dir, 't.tpl'), template);
+				return evaluator.evaluateUnit(path.join(dir, 'terragrunt.hcl'), 'inputs = { x = templatefile("t.tpl", {}) }', dir);
+			};
+			const rendered = async (template: string) => {
+				const result = await render(template);
+				assert.equal(result.error, undefined, template);
+				return (runtimeValueToPlain(result.inputs!) as Record<string, unknown>).x;
+			};
+			const refused = async (template: string) => {
+				const result = await render(template);
+				assert.equal(result.valid, false, template);
+				return result.error ?? '';
+			};
+
+			it('renders the branch an if takes, and only that one', async () => {
+				assert.equal(await rendered('%{ if true }yes%{ else }no%{ endif }'), 'yes');
+				assert.equal(await rendered('%{ if false }yes%{ else }no%{ endif }'), 'no');
+				assert.equal(await rendered('%{ if false }yes%{ endif }'), '');
+				assert.match(await refused('%{ if true }a%{ else }b%{ else }c%{ endif }'), /Unexpected else directive; Already in the else clause for the if/);
+			});
+
+			it('holds conditions and operators to the same', async () => {
+				assert.equal(await rendered('%{ if "1" }yes%{ else }no%{ endif }'), 'yes');
+				assert.equal(await rendered('${!"true"}'), false);
+				assert.equal(await rendered('${null && true}'), false);
+				assert.match(await refused('%{ if 1 }yes%{ else }no%{ endif }'), /The condition expression must be of type bool\./);
+				assert.match(await refused('%{ if null }yes%{ endif }'), /The condition value is null\. Conditions must either be true or false\./);
+				assert.match(await refused('${1 && true}'), /Unsuitable value for left operand: bool required, but have number\./);
+				assert.match(await refused('${"x" ? "a" : "b"}'), /The condition expression must be of type bool\./);
+				assert.match(await refused('${!null}'), /Error during operation: argument must not be null\./);
+			});
+		});
+	});
+
+	// Each case is what Terragrunt v1.2.2 renders, or refuses, for the same source.
+	describe('template directives', () => {
+		const evaluate = (content: string) => evaluator.evaluateUnit(configPath, content, process.cwd());
+		const rendered = async (content: string): Promise<unknown> => {
+			const result = await evaluate(content);
+			assert.equal(result.error, undefined, content);
+			return (runtimeValueToPlain(result.inputs!) as Record<string, unknown>).x;
+		};
+		const value = (expression: string) => rendered(`inputs = {\n  x = ${expression}\n}\n`);
+		/** The one fault an expression has, and the columns of line 2 it is written at. */
+		const fault = async (expression: string): Promise<[string, number, number]> => {
+			const result = await evaluate(`inputs = {\n  x = ${expression}\n}\n`);
+			assert.equal(result.valid, false, expression);
+			assert.equal(result.problems?.length, 1, `${expression}: ${result.error}`);
+			const [problem] = result.problems!;
+			assert.equal(problem.range.start.line, 1, expression);
+			return [problem.message, problem.range.start.character, problem.range.end.character];
+		};
+
+		it('renders the branch an if takes, and nothing for a false if with no else', async () => {
+			assert.equal(await value('"%{ if true }yes%{ endif }"'), 'yes');
+			assert.equal(await value('"%{ if false }yes%{ endif }"'), '');
+			assert.equal(await value('"a%{ if false }yes%{ else }no%{ endif }b"'), 'anob');
+			assert.equal(await value('"%{ if "true" }yes%{ else }no%{ endif }"'), 'yes');
+		});
+
+		it('leaves the branch an if does not take unevaluated', async () => {
+			assert.equal(await value('"%{ if true }ok%{ else }${local.missing}%{ endif }"'), 'ok');
+		});
+
+		it('renders a for once for each element, in the collection\'s order, and joins the renderings', async () => {
+			assert.equal(await value('"%{ for x in ["a", "b"] }${x};%{ endfor }"'), 'a;b;');
+			assert.equal(await value('"%{ for i, x in ["a", "b"] }${i}=${x} %{ endfor }"'), '0=a 1=b ');
+			assert.equal(await value('"%{ for k, v in { b = 2, a = 1 } }${k}${v}%{ endfor }"'), 'a1b2');
+			assert.equal(await value('"[%{ for x in [] }${x}%{ endfor }]"'), '[]');
+			assert.equal(await value('"%{ for x in [1, 2] }%{ if x == 2 }two%{ else }${x},%{ endif }%{ endfor }"'), '1,two');
+		});
+
+		it('binds a for variable in a local without taking it for a variable the local reads', async () => {
+			assert.equal(await rendered([
+				'locals {',
+				'  letters = ["a", "b"]',
+				'  joined  = "%{ for letter in local.letters }${letter}%{ endfor }"',
+				'}',
+				'inputs = { x = local.joined }'
+			].join('\n')), 'ab');
+		});
+
+		it('strips the space beside a sequence its ~ marks, escapes decoded first', async () => {
+			assert.equal(await value('"a  %{~ if true ~}  b  %{~ endif ~}  c"'), 'abc');
+			assert.equal(await value('"a ${~ "x" ~} b"'), 'axb');
+			assert.equal(await value('"a\\n%{~ if true ~}\\n b%{ endif }"'), 'ab');
+		});
+
+		it('evaluates directives in a heredoc, where a strip marker reaches only to the end of its line', async () => {
+			assert.equal(await value('<<EOT\n%{ for x in ["a", "b"] ~}\n- ${x}\n%{ endfor ~}\nEOT\n'), '- a\n- b\n');
+			assert.equal(await value('<<EOT\na\n%{ if true ~}\n  b\n%{~ endif }\nEOT\n'), 'a\n  b\n');
+		});
+
+		it('refuses an if condition that is not a bool, or is null, where the condition is written', async () => {
+			assert.deepEqual(await fault('"%{ if 1 }yes%{ endif }"'), ['The condition expression must be of type bool.', 13, 14]);
+			assert.deepEqual(await fault('"%{ if null }yes%{ endif }"'), ['The condition value is null. Conditions must either be true or false.', 13, 17]);
+		});
+
+		it('refuses a for collection that is null or not a collection, where the collection is written', async () => {
+			assert.deepEqual(await fault('"%{ for x in "ab" }${x}%{ endfor }"'), ['A value of type string cannot be used as the collection in a \'for\' expression.', 19, 23]);
+			assert.deepEqual(await fault('"%{ for x in 1 }${x}%{ endfor }"'), ['A value of type number cannot be used as the collection in a \'for\' expression.', 19, 20]);
+			assert.deepEqual(await fault('"%{ for x in null }${x}%{ endfor }"'), ['A null value cannot be used as the collection in a \'for\' expression.', 19, 23]);
+		});
 	});
 
 	describe('substr', () => {
@@ -182,16 +380,157 @@ describe('semantic configuration evaluation', () => {
 		});
 
 		it('rejects an offset or a length that is not a whole number', async () => {
-			for (const [args, parameter] of [['"hello", 1.5, 2', 'offset'], ['"hello", 1, 2.5', 'length'], ['"hello", -0.5, -1', 'offset']]) {
+			for (const args of ['"hello", 1.5, 2', '"hello", 1, 2.5', '"hello", -0.5, -1']) {
 				const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = substr(${args})\n}\n`, process.cwd());
 				assert.equal(result.valid, false, args);
-				assert.match(result.error ?? '', new RegExp(`substr ${parameter} must be a whole number`), args);
+				assert.equal(result.error, 'value must be a whole number, between -9223372036854775808 and 9223372036854775807', args);
 			}
 		});
 
 		it('counts grapheme clusters', async () => {
-			assert.equal(await substr('"🇬🇧éx", 1, 1'), 'é');
+			assert.equal(await substr('"\u{1F1EC}\u{1F1E7}e\u0301x", 1, 1'), '\u00e9');
 			assert.equal(await substr('"a👍🏽b", -2, 1'), '👍🏽');
+		});
+	});
+
+	// Every expected value and message below is what Terragrunt 1.2.2 renders for the same expression.
+	describe('strings and functions as Terragrunt evaluates them', () => {
+		const render = async (expression: string): Promise<unknown> => {
+			const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = ${expression}\n}\n`, process.cwd());
+			assert.equal(result.error, undefined, expression);
+			return (runtimeValueToPlain(result.inputs!) as Record<string, unknown>).x;
+		};
+		const failure = async (expression: string): Promise<string> => {
+			const result = await evaluator.evaluateUnit(configPath, `inputs = {\n  x = ${expression}\n}\n`, process.cwd());
+			assert.equal(result.valid, false, expression);
+			return result.error ?? '';
+		};
+
+		it('reads \\u and \\U escapes in a quoted string as the characters they name', async () => {
+			assert.equal(await render('"caf\\u00e9"'), 'caf\u00e9');
+			assert.equal(await render('"\\U0001F600"'), '\u{1F600}');
+			assert.equal(await render('"%%{x}\\u00e9"'), '%{x}\u00e9');
+			assert.equal(await render('"a\\\\u00e9"'), 'a\\u00e9');
+			assert.deepEqual(await render('{ "caf\\u00e9" = 1 }'), { 'caf\u00e9': 1 });
+		});
+
+		it('normalizes every string to NFC, as written and as functions make it', async () => {
+			assert.equal(await render('"e\\u0301"'), '\u00e9');
+			assert.equal(await render('"e\u0301"'), '\u00e9');
+			assert.equal(await render('"x${"e\\u0301"}"'), 'x\u00e9');
+			assert.equal(await render('"\\u212b"'), '\u00c5');
+			assert.equal(await render('"\\u00e9" == "e\\u0301"'), true);
+			assert.equal(await render('length("e\\u0301")'), 1);
+			assert.equal(await render('join("", ["e", "\\u0301"])'), '\u00e9');
+			assert.equal(await render('upper("e\\u0301")'), '\u00c9');
+			assert.equal(await render('format("%s%s", "e", "\\u0301")'), '\u00e9');
+			assert.deepEqual(await render('{ "e\\u0301" = 1, "\\u00e9" = 2 }'), { '\u00e9': 2 });
+			assert.deepEqual(await render('{ e\u0301 = 1 }'), { '\u00e9': 1 });
+			assert.deepEqual(await render('keys({ "b" = 1, "e\\u0301" = 2, "a" = 3 })'), ['a', 'b', '\u00e9']);
+		});
+
+		it('merges past a null argument, and names the type of any argument that is not an object', async () => {
+			assert.deepEqual(await render('merge(null)'), {});
+			assert.deepEqual(await render('merge(null, null)'), {});
+			assert.deepEqual(await render('merge(null, { a = 1 })'), { a: 1 });
+			assert.deepEqual(await render('merge({ a = 1 }, null, { b = 2 })'), { a: 1, b: 2 });
+			assert.equal(await failure('merge({ a = 1 }, "x")'), 'arguments must be maps or objects, got "string"');
+		});
+
+		it('refuses concat, max, min, setunion and setintersection with no argument', async () => {
+			assert.equal(await failure('concat()'), 'at least one argument is required');
+			assert.equal(await failure('max()'), 'must pass at least one number');
+			assert.equal(await failure('min()'), 'must pass at least one number');
+			for (const name of ['setunion', 'setintersection']) {
+				assert.equal(await failure(`${name}()`), `Not enough function arguments; Function "${name}" expects at least 1 argument(s). Missing value for "first_set".`);
+			}
+			assert.deepEqual(await render('concat(["a"])'), ['a']);
+			assert.equal(await render('max(1)'), 1);
+			assert.equal(await render('min(1)'), 1);
+			assert.deepEqual(await render('setunion(["a"])'), ['a']);
+			assert.deepEqual(await render('setintersection(["a"])'), ['a']);
+		});
+
+		it('formats each verb as go-cty does', async () => {
+			const cases: Array<[string, string]> = [
+				['"%d|%5d|%-5d|%05d|%+d|% d|%.3d|%x|%X|%#x|%o|%#o|%b|%#b", 42, 42, 42, 42, 42, 42, 42, 255, 255, 255, 8, 8, 5, 5', '42|   42|42   |00042|+42| 42|042|ff|FF|0xff|10|010|101|0b101'],
+				['"%d|%x|%5.3d", -42, -255, -7', '-42|-ff| -007'],
+				['"%e|%E|%.2e|%10.3e|%-12e|%+e|%012.2e", 1234.5678, 1234.5678, 1234.5678, 1234.5678, 1234.5678, 1234.5678, -1234.5678', '1.234568e+03|1.234568E+03|1.23e+03| 1.235e+03|1.234568e+03|+1.234568e+03|-0001.23e+03'],
+				['"%f|%.2f|%8.3f|%-8.1f|%+.1f|% .1f|%08.2f|%.0f|%.0f|%.0f", 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159, -3.14159, 2.5, 3.5, 0.5', '3.141590|3.14|   3.142|3.1     |+3.1| 3.1|-0003.14|2|4|0'],
+				['"%.2f|%.2f|%.1f|%.1f|%.0f", 1.005, 2.675, 0.25, 0.35, 0.6', '1.00|2.67|0.2|0.3|1'],
+				['"%g|%g|%g|%g|%g|%.3g|%G|%g", 1234567, 1000000, 100000, 0.0001, 0.00001, 3.14159, 0.00001, 1.5', '1.234567e+06|1e+06|100000|0.0001|1e-05|3.14|1E-05|1.5'],
+				['"%v|%v|%v|%v|%v|%v|%v", 1234567, 1000000, 0.00001, 1.5, "str", true, null', '1.234567e+06|1e+06|1e-05|1.5|str|true|null'],
+				['"%v|%#v|%#v|%v|%v", [1, "a"], "str", 1.5, { a = 1 }, ["x"]', '[1,"a"]|"str"|1.5|{"a":1}|["x"]'],
+				['"%q|%10q|%-6q|%s|%5s|%-5s|%05s|%.2s|%.0s|%s|%s", "a\\"b", "hi", "hi", 1.5, "ab", "ab", "ab", "hello", "hello", true, 100000000000000000000', '"a\\"b"|      "hi"|"hi"  |1.5|   ab|ab   |000ab|he|hello|true|100000000000000000000'],
+				['"%t|%t|%t|%t", true, false, "true", "0"', 'true|false|true|false'],
+				['"%d", "12"', '12'],
+				['"%5.1f|%-8.3s|%8s", 3.14159, "abcdef", "\u{1F600}ab"', '  3.1|abc     |     \u{1F600}ab'],
+				['"%.3s|%3s", "e\\u0301e\\u0301e\\u0301x", "e\\u0301"', '\u00e9\u00e9\u00e9|  \u00e9'],
+				['"%.f|%.e|%.g", 2.5, 2.5, 25', '2|2e+00|2e+01'],
+				['"%f", 1e21', '1000000000000000000000.000000'],
+				['"%v|%g|%e", 1e21, 1e21, 0', '1e+21|1e+21|0.000000e+00'],
+				['"%v|%f|%d", 0.1, 0.1, 0', '0.1|0.100000|0'],
+				['"%#e|%#g|%#f", 1.5, 1.5, 1.5', '1.500000e+00|1.5|1.500000'],
+				['"%+s|%+v|% s", "a", "b", "c"', 'a|b|c'],
+				['"%3t|%-3v|%03v|%03s", true, true, 7, "a"', 'true|true|007|00a']
+			];
+			for (const [args, expected] of cases) assert.equal(await render(`format(${args})`), expected, args);
+		});
+
+		it('refuses what go-cty cannot format, with its messages', async () => {
+			const cases: Array<[string, string]> = [
+				['"%d", 1.5', 'unsupported value for "%d" at 0: an integer is required'],
+				['"%t", "yes"', 'unsupported value for "%t" at 0: a bool is required'],
+				['"%t", 1', 'unsupported value for "%t" at 0: bool required, but have number'],
+				['"%d", "abc"', 'unsupported value for "%d" at 0: a number is required'],
+				['"%d", true', 'unsupported value for "%d" at 0: number required, but have bool'],
+				['"%s", [1]', 'unsupported value for "%s" at 0: string required, but have tuple'],
+				['"%s", null', 'unsupported value for "%s" at 0: null value cannot be formatted'],
+				['"%d", null', 'unsupported value for "%d" at 0: null value cannot be formatted'],
+				['"%y", 1', 'unsupported format verb \'y\' in "%y" at offset 0'],
+				['"%!", 1', 'unrecognized format character \'!\' at offset 1'],
+				['"abc %", 1', 'invalid format string starting at offset 5'],
+				['"%[2]s %s %[1]s", "a", "b"', 'not enough arguments for "%s" at 6: need index 3 but have 2 total'],
+				['"%d %d", 1', 'not enough arguments for "%d" at 3: need index 2 but have 1 total'],
+				['"%d", 1, 2', 'too many arguments; only 1 used by format string'],
+				['"no verbs", 1', 'too many arguments; no verbs in format string']
+			];
+			for (const [args, message] of cases) assert.equal(await failure(`format(${args})`), message, args);
+		});
+
+		it('formats a list from list arguments of one length, using any other argument in every string', async () => {
+			assert.deepEqual(await render('formatlist("%s-%s", ["a", "b"], "x")'), ['a-x', 'b-x']);
+			assert.deepEqual(await render('formatlist("%s-%s", "x", ["a", "b"])'), ['x-a', 'x-b']);
+			assert.deepEqual(await render('formatlist("%s-%s", ["a", "b"], ["c", "d"])'), ['a-c', 'b-d']);
+			assert.deepEqual(await render('formatlist("%s", "x")'), ['x']);
+			assert.deepEqual(await render('formatlist("%s %s", "x", "y")'), ['x y']);
+			assert.deepEqual(await render('formatlist("%s", [])'), []);
+			assert.deepEqual(await render('formatlist("%s %s", [], "x")'), []);
+			assert.deepEqual(await render('formatlist("%v", null)'), ['null']);
+			assert.deepEqual(await render('formatlist("%v", { a = 1 })'), ['{"a":1}']);
+			assert.deepEqual(await render('formatlist("plain")'), ['plain']);
+			const failures: Array<[string, string]> = [
+				['"%s-%s", ["a", "b"], ["c"]', 'argument 2 has length 1, which is inconsistent with argument 1 of length 2'],
+				['"%s-%s", ["a"], ["c", "d"]', 'argument 2 has length 2, which is inconsistent with argument 1 of length 1'],
+				['"%s %s", [], ["a"]', 'argument 2 has length 1, which is inconsistent with argument 1 of length 0'],
+				['"%s", null', 'error on format iteration 0: unsupported value for "%s" at 0: null value cannot be formatted'],
+				['"%d", [1, 1.5]', 'error on format iteration 1: unsupported value for "%d" at 0: an integer is required'],
+				['"%s", [["a"]]', 'error on format iteration 0: unsupported value for "%s" at 0: string required, but have tuple'],
+				['"%s=%s", { a = 1 }, ["x"]', 'error on format iteration 0: unsupported value for "%s" at 0: string required, but have object']
+			];
+			for (const [args, message] of failures) assert.equal(await failure(`formatlist(${args})`), message, args);
+		});
+
+		it('refuses an index or a size that is not a whole number', async () => {
+			const whole = 'value must be a whole number, between -9223372036854775808 and 9223372036854775807';
+			assert.equal(await failure('slice(["a", "b", "c"], 0.5, 2)'), `invalid start index: ${whole}`);
+			assert.equal(await failure('slice(["a", "b", "c"], 0, 1.5)'), `invalid end index: ${whole}`);
+			assert.equal(await failure('chunklist(["a", "b"], 1.5)'), `invalid size: ${whole}`);
+			assert.equal(await failure('element(["a", "b"], 1.5)'), `invalid index: ${whole}`);
+			assert.deepEqual(await render('slice(["a", "b", "c"], 1, 3)'), ['b', 'c']);
+			assert.deepEqual(await render('chunklist(["a", "b", "c"], 2)'), [['a', 'b'], ['c']]);
+			assert.equal(await render('element(["a", "b"], 3)'), 'b');
+			assert.equal(await render('element(["a", "b"], -1)'), 'b');
 		});
 	});
 
@@ -343,6 +682,25 @@ describe('semantic configuration evaluation', () => {
 					exposed: 'live/app'
 				});
 			});
+		});
+
+		it('takes an expose HCL converts to a bool, null as false, and refuses any other, as Terragrunt does', async () => {
+			const unit = (expose: string) => ({
+				'root.hcl': 'locals {\n  a = 1\n}\n',
+				'live/app/terragrunt.hcl': `include "root" {\n  path   = find_in_parent_folders("root.hcl")\n  expose = ${expose}\n}\n`
+			});
+			for (const expose of ['"1"', 'null', '"false"']) {
+				await withUnit(unit(expose), (_root, result) => assert.equal(result.valid, true, `${expose}: ${result.error}`));
+			}
+			for (const [expose, message, start, end] of [
+				['"yes"', 'Unsuitable value: a bool is required', 11, 16],
+				['1', 'Unsuitable value: bool required, but have number', 11, 12]
+			] as const) {
+				await withUnit(unit(expose), (_root, result) => {
+					assert.deepEqual(result.problems?.map(problem => [problem.message, problem.range.start.line, problem.range.start.character, problem.range.end.character]),
+						[[message, 2, start, end]], expose);
+				});
+			}
 		});
 
 		it('answers in the unit with the directory of the configuration it includes', async () => {
@@ -727,6 +1085,27 @@ describe('semantic configuration evaluation', () => {
 		} finally {
 			await fs.rm(base, { recursive: true, force: true });
 		}
+	});
+
+	// What Terragrunt v1.2.2 renders for the same heredocs.
+	it('keeps the line break that ends a heredoc\'s last line', async () => {
+		const content = [
+			'inputs = {',
+			'  plain = <<EOT',
+			'a',
+			'b',
+			'EOT',
+			'  flush = <<-EOT',
+			'    a',
+			'    b',
+			'    EOT',
+			'  empty = <<EOT',
+			'EOT',
+			'}'
+		].join('\n');
+		const result = await evaluator.evaluateUnit(configPath, content, process.cwd());
+		assert.equal(result.error, undefined);
+		assert.deepEqual(runtimeValueToPlain(result.inputs!), { plain: 'a\nb\n', flush: 'a\nb\n', empty: '' });
 	});
 
 	it('reduces the template escapes the way Terragrunt does', async () => {
@@ -1153,14 +1532,14 @@ describe('semantic configuration evaluation', () => {
 				readEncryptedSops: true
 			});
 			const unitPath = path.join(root, 'terragrunt.hcl');
-			const result = await withoutSopsKey(root, () => reader.evaluateUnit(unitPath, sopsUnit, root));
+			const result = await withoutSopsKey(() => reader.evaluateUnit(unitPath, sopsUnit, root));
 			assert.equal(result.valid, true, result.error);
 			const masked = { token: '(encrypted)', db: { password: '(encrypted)' } };
 			assert.deepEqual(runtimeValueToPlain(result.inputs!), { yaml: masked, json: masked, token: '(encrypted)' });
 			const inputs = result.inputs!.value as Map<string, unknown>;
 			assert.deepEqual(inputs.get('token'), { type: 'string', value: 'ENC[AES256_GCM,data:nq2Z7w==,iv:A1B2,tag:C3D4,type:str]', encrypted: true });
 
-			const spans = await withoutSopsKey(root, () => reader.evaluatedSpans(unitPath, sopsUnit, root));
+			const spans = await withoutSopsKey(() => reader.evaluatedSpans(unitPath, sopsUnit, root));
 			const shown = spans.map(span => sopsUnit.slice(span.start, span.end));
 			assert.ok(shown.includes('yaml') && shown.includes('local.yaml'), shown.join(', '));
 			assert.ok(!shown.includes('token') && !shown.includes('local.yaml.token'), shown.join(', '));
@@ -1173,12 +1552,62 @@ describe('semantic configuration evaluation', () => {
 		const fs = await import('node:fs/promises');
 		const root = await sopsWorkspace();
 		try {
-			const result = await withoutSopsKey(root, () => evaluator.evaluateUnit(path.join(root, 'terragrunt.hcl'), sopsUnit, root));
+			const result = await withoutSopsKey(() => evaluator.evaluateUnit(path.join(root, 'terragrunt.hcl'), sopsUnit, root));
 			assert.equal(result.valid, false);
 			assert.match(result.error ?? '', /Failed to get the data key/);
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
 		}
+	});
+
+	describe('without sops installed', () => {
+		const missing = (root: string, file: string) =>
+			`sops_decrypt_file cannot decrypt ${path.join(root, file)}: the sops program is not on PATH. ` +
+			'Install sops (https://github.com/getsops/sops/releases) and put it on PATH, or validate offline with ' +
+			'"hcl validate --offline" to read the file as written.';
+		const withEvaluator = async (options: { partialRender?: boolean; readEncryptedSops?: boolean }, check: (root: string, result: Awaited<ReturnType<ConfigEvaluator['evaluateUnit']>>) => void) => {
+			const fs = await import('node:fs/promises');
+			const root = await sopsWorkspace();
+			try {
+				const reader = new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true, ...options });
+				check(root, await withoutSops(root, () => reader.evaluateUnit(path.join(root, 'terragrunt.hcl'), sopsUnit, root)));
+			} finally {
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		};
+
+		it('fails naming sops and how to provide it', async () => {
+			await withEvaluator({}, (root, result) => {
+				assert.equal(result.valid, false);
+				assert.equal(result.unresolved, undefined);
+				assert.equal(result.error, missing(root, 'secrets.sops.yaml'));
+			});
+		});
+
+		it('fails a render too, rather than leaving the secrets out', async () => {
+			await withEvaluator({ partialRender: true }, (root, result) => {
+				assert.equal(result.unresolved, undefined);
+				assert.equal(result.error, missing(root, 'secrets.sops.yaml'));
+			});
+		});
+
+		it('reads the file as written when validating offline, which needs no sops', async () => {
+			await withEvaluator({ readEncryptedSops: true }, (_root, result) => assert.equal(result.valid, true, result.error));
+		});
+
+		it('fails offline on a file with no sops metadata to read as written, naming sops', async () => {
+			const fs = await import('node:fs/promises');
+			const root = await sopsWorkspace();
+			try {
+				await fs.writeFile(path.join(root, 'secrets.sops.yaml'), 'token: plain\n');
+				const reader = new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true, readEncryptedSops: true });
+				const result = await withoutSops(root, () => reader.evaluateUnit(path.join(root, 'terragrunt.hcl'), sopsUnit, root));
+				assert.equal(result.error, `sops_decrypt_file cannot decrypt ${path.join(root, 'secrets.sops.yaml')}: the sops program is not on PATH. ` +
+					'Install sops (https://github.com/getsops/sops/releases) and put it on PATH.');
+			} finally {
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		});
 	});
 
 	it('still fails on a file sops cannot decrypt that holds no sops metadata, even when asked to read keys', async () => {
@@ -1193,7 +1622,7 @@ describe('semantic configuration evaluation', () => {
 				workspaceTrusted: true,
 				readEncryptedSops: true
 			});
-			const result = await withoutSopsKey(root, () => reader.evaluateUnit(path.join(root, 'terragrunt.hcl'), sopsUnit, root));
+			const result = await withoutSopsKey(() => reader.evaluateUnit(path.join(root, 'terragrunt.hcl'), sopsUnit, root));
 			assert.equal(result.valid, false);
 			assert.match(result.error ?? '', /Failed to get the data key/);
 		} finally {
@@ -1219,42 +1648,46 @@ describe('semantic configuration evaluation', () => {
 			const fs = await import('node:fs/promises');
 			const unitPath = path.join(root, 'terragrunt.hcl');
 			await fs.writeFile(unitPath, unit);
-			return withoutSopsKey(root, () => encryptedReader().evaluateUnit(unitPath, unit, root));
+			return withoutSopsKey(() => encryptedReader().evaluateUnit(unitPath, unit, root));
 		}
 
-		it('makes everything computed from it unresolved, never a value computed from the encrypted text', async () => {
-			const fs = await import('node:fs/promises');
-			const root = await sopsWorkspace();
-			try {
-				const computed: Record<string, string> = {
-					template: '"https://${local.secrets.token}@example.com"',
-					call: 'upper(local.secrets.token)',
-					conversion: 'tonumber(local.secrets.token)',
-					encoding: 'jsonencode(local.secrets)',
-					comparison: 'local.secrets.token == "x"',
-					arithmetic: 'local.secrets.token + 1',
-					negation: '!local.secrets.token',
-					condition: 'local.secrets.token ? "a" : "b"',
-					index: '{ a = 1 }[local.secrets.token]',
-					key: '{ (local.secrets.token) = 1 }',
-					lookup_key: 'lookup({ a = 1 }, local.secrets.token, 0)',
-					inline_function: 'shout(local.secrets.token)',
-					list_comprehension: '[for item in [local.secrets.token] : "${item}!"]',
-					comprehension_key: '{ for item in [local.secrets.token] : item => 1 }'
-				};
-				for (const [name, expression] of Object.entries(computed)) {
-					const unit = [
-						'function shout(value) { return value.toUpperCase(); }',
-						`locals { secrets = ${secrets} }`,
-						`inputs = { ${name} = ${expression} }`
-					].join('\n');
-					const result = await evaluateWithoutKey(root, unit);
-					assert.equal(result.valid, false, `${name}: ${JSON.stringify(result.inputs ? runtimeValueToPlain(result.inputs) : null)}`);
-					assert.equal(result.unresolved, true, `${name}: ${result.error}`);
-					assert.match(result.error ?? '', /could not be decrypted/, name);
-				}
-			} finally {
-				await fs.rm(root, { recursive: true, force: true });
+		// An evaluation runs sops once, so each case is a test of its own: one evaluation keeps well within a test's time
+		// on a loaded machine, where all of them in one test did not.
+		describe('makes everything computed from it unresolved, never a value computed from the encrypted text', () => {
+			const computed: Record<string, string> = {
+				template: '"https://${local.secrets.token}@example.com"',
+				call: 'upper(local.secrets.token)',
+				conversion: 'tonumber(local.secrets.token)',
+				encoding: 'jsonencode(local.secrets)',
+				comparison: 'local.secrets.token == "x"',
+				arithmetic: 'local.secrets.token + 1',
+				negation: '!local.secrets.token',
+				condition: 'local.secrets.token ? "a" : "b"',
+				index: '{ a = 1 }[local.secrets.token]',
+				key: '{ (local.secrets.token) = 1 }',
+				lookup_key: 'lookup({ a = 1 }, local.secrets.token, 0)',
+				inline_function: 'shout(local.secrets.token)',
+				list_comprehension: '[for item in [local.secrets.token] : "${item}!"]',
+				comprehension_key: '{ for item in [local.secrets.token] : item => 1 }'
+			};
+			for (const [name, expression] of Object.entries(computed)) {
+				it(`${name}: ${expression}`, async () => {
+					const fs = await import('node:fs/promises');
+					const root = await sopsWorkspace();
+					try {
+						const unit = [
+							'function shout(value) { return value.toUpperCase(); }',
+							`locals { secrets = ${secrets} }`,
+							`inputs = { ${name} = ${expression} }`
+						].join('\n');
+						const result = await evaluateWithoutKey(root, unit);
+						assert.equal(result.valid, false, JSON.stringify(result.inputs ? runtimeValueToPlain(result.inputs) : null));
+						assert.equal(result.unresolved, true, result.error);
+						assert.match(result.error ?? '', /could not be decrypted/);
+					} finally {
+						await fs.rm(root, { recursive: true, force: true });
+					}
+				});
 			}
 		});
 
@@ -1298,31 +1731,43 @@ describe('semantic configuration evaluation', () => {
 			}
 		});
 
-		it('never runs a command given it, however it is passed', async () => {
-			const fs = await import('node:fs/promises');
-			const root = await sopsWorkspace();
-			try {
-				const ran = path.join(root, 'ran');
-				const record = (label: string) => `"echo ${label} >> ${ran}"`;
-				const calls: Record<string, string> = {
-					argument: `run_cmd("sh", "-c", ${record('argument')}, local.secrets.token)`,
-					template: `run_cmd("sh", "-c", "echo template >> ${ran}; echo \${local.secrets.token}")`,
-					computed: `run_cmd("sh", "-c", ${record('computed')}, lower(local.secrets.token))`,
-					passed_through: `run_cmd("sh", "-c", ${record('passed_through')}, lookup(local.secrets, "token", ""))`,
-					collection: `run_cmd("sh", "-c", ${record('collection')}, jsonencode(local.secrets.db))`
-				};
-				for (const [name, call] of Object.entries(calls)) {
-					const result = await evaluateWithoutKey(root, [`locals { secrets = ${secrets} }`, `inputs = { ${name} = ${call} }`].join('\n'));
-					assert.equal(result.unresolved, true, `${name}: ${result.error}`);
-				}
-				await assert.rejects(fs.readFile(ran, 'utf8'), { code: 'ENOENT' });
-
-				const plain = await evaluateWithoutKey(root, [`locals { secrets = ${secrets} }`, `inputs = { plain = run_cmd("sh", "-c", ${record('plain')}) }`].join('\n'));
-				assert.equal(plain.valid, true, plain.error);
-				assert.equal(await fs.readFile(ran, 'utf8'), 'plain\n');
-			} finally {
-				await fs.rm(root, { recursive: true, force: true });
+		// One evaluation for each way of passing it, as above.
+		describe('never runs a command given it, however it is passed', () => {
+			const record = (ran: string, label: string) => `"echo ${label} >> ${ran}"`;
+			const calls: Record<string, (ran: string) => string> = {
+				argument: ran => `run_cmd("sh", "-c", ${record(ran, 'argument')}, local.secrets.token)`,
+				template: ran => `run_cmd("sh", "-c", "echo template >> ${ran}; echo \${local.secrets.token}")`,
+				computed: ran => `run_cmd("sh", "-c", ${record(ran, 'computed')}, lower(local.secrets.token))`,
+				passed_through: ran => `run_cmd("sh", "-c", ${record(ran, 'passed_through')}, lookup(local.secrets, "token", ""))`,
+				collection: ran => `run_cmd("sh", "-c", ${record(ran, 'collection')}, jsonencode(local.secrets.db))`
+			};
+			for (const [name, call] of Object.entries(calls)) {
+				it(name, async () => {
+					const fs = await import('node:fs/promises');
+					const root = await sopsWorkspace();
+					try {
+						const ran = path.join(root, 'ran');
+						const result = await evaluateWithoutKey(root, [`locals { secrets = ${secrets} }`, `inputs = { ${name} = ${call(ran)} }`].join('\n'));
+						assert.equal(result.unresolved, true, result.error);
+						await assert.rejects(fs.readFile(ran, 'utf8'), { code: 'ENOENT' });
+					} finally {
+						await fs.rm(root, { recursive: true, force: true });
+					}
+				});
 			}
+
+			it('while it runs one given nothing from it', async () => {
+				const fs = await import('node:fs/promises');
+				const root = await sopsWorkspace();
+				try {
+					const ran = path.join(root, 'ran');
+					const plain = await evaluateWithoutKey(root, [`locals { secrets = ${secrets} }`, `inputs = { plain = run_cmd("sh", "-c", ${record(ran, 'plain')}) }`].join('\n'));
+					assert.equal(plain.valid, true, plain.error);
+					assert.equal(await fs.readFile(ran, 'utf8'), 'plain\n');
+				} finally {
+					await fs.rm(root, { recursive: true, force: true });
+				}
+			});
 		});
 
 		it('renders no generate block or remote_state that would write it to a file', async () => {
@@ -1348,7 +1793,7 @@ describe('semantic configuration evaluation', () => {
 				const unitPath = path.join(root, 'terragrunt.hcl');
 				await fs.writeFile(unitPath, unit);
 				const reader = encryptedReader(true);
-				const rendered = await withoutSopsKey(root, () => reader.evaluateRenderedConfig(unitPath, unit, root));
+				const rendered = await withoutSopsKey(() => reader.evaluateRenderedConfig(unitPath, unit, root));
 				const plain = runtimeValueToPlain(rendered) as Record<string, unknown>;
 				assert.deepEqual(plain.generate, { secret: { path: 'secret.txt' }, plain: { path: 'plain.txt', contents: 'plain' } });
 				assert.equal(Object.prototype.hasOwnProperty.call(plain, 'remote_state'), false, JSON.stringify(plain.remote_state));

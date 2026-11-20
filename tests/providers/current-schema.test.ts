@@ -1,6 +1,8 @@
 import { expect } from 'chai';
+import { CompletionItemKind } from 'vscode-languageserver';
 
 import { ConfigEvaluator, runtimeValueToPlain } from '../../src/Evaluator';
+import functionsJson from '../../src/functions.json';
 import { ParsedDocument } from '../../src/ParsedDocument';
 import { Schema } from '../../src/Schema';
 import { Workspace } from '../../src/Workspace';
@@ -95,6 +97,81 @@ generate "provider" {
 				.to.deep.equal(['Function "setproduct" requires at least 2 arguments']);
 			expect((await evaluate('inputs = { x = setproduct(["a"]) }')).error).to.match(/setproduct requires at least two arguments/);
 			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', 'inputs = { x = setproduct(["a"], [1]) }')).to.deep.equal([]);
+		});
+	});
+
+	describe('argument counts', () => {
+		const evaluate = (content: string) => new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true })
+			.evaluateUnit('/repo/app/terragrunt.hcl', content, '/repo/app');
+
+		it('accepts range with one, two or three arguments', async () => {
+			const content = 'inputs = {\n  one   = range(4)\n  two   = range(1, 4)\n  three = range(10, 1, -3)\n}';
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', content)).to.deep.equal([]);
+			const result = await evaluate(content);
+			expect(result.error).to.equal(undefined);
+			expect(runtimeValueToPlain(result.inputs!)).to.deep.equal({ one: [0, 1, 2, 3], two: [1, 2, 3], three: [10, 7, 4] });
+		});
+
+		it('refuses range with no arguments or more than three', async () => {
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', 'inputs = { x = range() }'))
+				.to.deep.equal(['Function "range" requires at least 1 argument']);
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', 'inputs = { x = range(1, 2, 3, 4) }'))
+				.to.deep.equal(['Function "range" accepts at most 3 arguments']);
+			for (const call of ['range()', 'range(1, 2, 3, 4)']) {
+				const result = await evaluate(`inputs = { x = ${call} }`);
+				expect(result.valid, call).to.equal(false);
+				expect(result.error, call).to.include('range must have one, two, or three arguments');
+			}
+		});
+
+		it('counts range down when the limit is below the start, and refuses a step away from the limit', async () => {
+			const result = await evaluate('inputs = {\n  negative = range(-3)\n  down     = range(4, 1)\n  half     = range(0, 2, 0.5)\n  empty    = range(1, 1, 0)\n}');
+			expect(result.error).to.equal(undefined);
+			expect(runtimeValueToPlain(result.inputs!)).to.deep.equal({ negative: [0, -1, -2], down: [4, 3, 2], half: [0, 0.5, 1, 1.5], empty: [] });
+			const failures: Array<[string, string]> = [
+				['range(1, 4, -1)', 'range end must be less than start when step is negative'],
+				['range(4, 1, 1)', 'range end must be greater than start when step is positive'],
+				['range(4, 1, 0)', 'range end must be greater than start when step is positive'],
+				['range(1, 4, 0)', 'more than 1024 values were generated; either decrease the difference between start and end or use a smaller step'],
+				['range(1025)', 'more than 1024 values were generated; either decrease the difference between start and end or use a smaller step']
+			];
+			for (const [call, message] of failures) {
+				const failed = await evaluate(`inputs = { x = ${call} }`);
+				expect(failed.valid, call).to.equal(false);
+				expect(failed.error, call).to.include(message);
+			}
+			const limit = await evaluate('inputs = { x = range(1024) }');
+			expect(limit.error).to.equal(undefined);
+			expect((runtimeValueToPlain(limit.inputs!) as { x: number[] }).x).to.have.length(1024);
+		});
+
+		it('accepts join with any number of lists and try with any number of expressions after the first', () => {
+			const content = 'inputs = {\n  a = join(",", ["a"], ["b"], ["c"])\n  b = try(1)\n  c = try(1, 2, 3)\n}';
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', content)).to.deep.equal([]);
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', 'inputs = { x = try() }'))
+				.to.deep.equal(['Function "try" requires at least 1 argument']);
+		});
+
+		it('counts a final argument expanded with ... as any number of arguments', () => {
+			const content = 'inputs = {\n  a = upper(["a"]...)\n  b = upper("a", []...)\n  c = substr(["abc", 0, 1]...)\n}';
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', content)).to.deep.equal([]);
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', 'inputs = { x = upper("a", "b", []...) }'))
+				.to.deep.equal(['Function "upper" accepts at most 1 argument']);
+		});
+
+		it('requires every argument of parseint, substr, trim, textencodebase64 and textdecodebase64', () => {
+			const short: Array<[string, string]> = [
+				['parseint("10")', 'Function "parseint" requires at least 2 arguments'],
+				['substr("abc", 1)', 'Function "substr" requires at least 3 arguments'],
+				['trim("xx")', 'Function "trim" requires at least 2 arguments'],
+				['textencodebase64("a")', 'Function "textencodebase64" requires at least 2 arguments'],
+				['textdecodebase64("YQ==")', 'Function "textdecodebase64" requires at least 2 arguments']
+			];
+			for (const [call, message] of short) {
+				expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', `inputs = { x = ${call} }`), call).to.deep.equal([message]);
+			}
+			const complete = 'inputs = {\n  a = parseint("10", 2)\n  b = substr("abc", 1, 1)\n  c = trim("xax", "x")\n  d = textencodebase64("a", "UTF-8")\n  e = textdecodebase64("YQ==", "UTF-8")\n}';
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', complete)).to.deep.equal([]);
 		});
 	});
 
@@ -195,13 +272,38 @@ unit "app" {
 		expect(registry.getFunctionNames().sort()).to.deep.equal(schema.getAllFunctions().map(definition => definition.name).sort());
 	});
 
-	it('does not expose functions rejected by the current runtime', () => {
-		const schema = Schema.getInstance();
-		for (const name of ['base64gunzip', 'cidrcontains', 'issensitive', 'plantimestamp', 'regex_replace', 'templatestring', 'type', 'urldecode']) {
-			expect(schema.getFunctionDefinition(name), `${name} metadata`).to.equal(undefined);
+	// functions.json lists Terragrunt v1.2.2's function table, which the parity suite holds it to; the schema, the
+	// completions and the evaluators must each offer exactly that list.
+	const listedFunctions = functionsJson.functions.map(definition => definition.name).sort();
+
+	it('offers exactly the functions functions.json lists, in the schema and the completions', async () => {
+		expect(Schema.getInstance().getAllFunctions().map(definition => definition.name).sort()).to.deep.equal(listedFunctions);
+		const document = new ParsedDocument(new Workspace(), 'file:///repo/app/terragrunt.hcl', 'inputs = {\n  x = \n}\n');
+		const completions = await document.getCompletionsAtPosition({ line: 1, character: 6 });
+		const offered = completions.filter(item => item.kind === CompletionItemKind.Function).map(item => item.label).sort();
+		expect(offered).to.deep.equal(listedFunctions);
+	});
+
+	it('offers the functions Terragrunt v1.2.2 has that it once hid or lacked', () => {
+		for (const name of [
+			'assumeequal', 'assumelistlength', 'assumelistlengthmax', 'assumelistlengthmin', 'assumemaplength',
+			'assumemaplengthmax', 'assumemaplengthmin', 'assumenotnull', 'assumesetlength', 'assumesetlengthmax',
+			'assumesetlengthmin', 'assumestringprefix', 'base64gunzip', 'base64gzip_compat', 'cidrcontains',
+			'ephemeralasnull', 'issensitive', 'list', 'map', 'templatestring', 'urldecode'
+		]) {
+			expect(listedFunctions, name).to.include(name);
 		}
-		for (const name of ['base64gzip', 'bcrypt', 'rsadecrypt', 'timestamp']) {
-			expect(schema.getFunctionDefinition(name), `${name} metadata`).not.to.equal(undefined);
+	});
+
+	it('refuses the names Terragrunt v1.2.2 does not define as unknown functions', async () => {
+		for (const call of ['type("a")', 'regex_replace("a-b", "-", "_")', 'plantimestamp()']) {
+			const name = call.slice(0, call.indexOf('('));
+			expect(listedFunctions, name).not.to.include(name);
+			const content = `inputs = {\n  x = ${call}\n}\n`;
+			expect(diagnosticsFor('file:///repo/app/terragrunt.hcl', content), name).to.include(`Unknown function: ${name}`);
+			const result = await new ConfigEvaluator({ environmentVariables: {}, terraformCommand: '', terraformCliArgs: [], workspaceTrusted: true })
+				.evaluateUnit('/repo/app/terragrunt.hcl', content, '/repo/app');
+			expect(result.error, name).to.include(`Unknown function "${name}"`);
 		}
 	});
 });

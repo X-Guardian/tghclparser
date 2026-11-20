@@ -1,8 +1,10 @@
 import type { RuntimeValue, ValueType } from '../model';
 
+// A string value is NFC-normalized as it is made, as go-cty normalizes every string on entry, so two spellings of
+// one character are one string wherever strings are compared, counted or written out.
 export const makeStringValue = (value: string): RuntimeValue<'string'> => ({
     type: 'string',
-    value
+    value: value.normalize('NFC')
 });
 
 export const makeNumberValue = (value: number): RuntimeValue<'number'> => ({
@@ -25,12 +27,41 @@ export const makeArrayValue = (value: RuntimeValue<ValueType>[]): RuntimeValue<'
     value
 });
 
+// An object's attribute names are NFC-normalized as go-cty normalizes them; the map is kept when they already are.
 export const makeObjectValue = (value: Map<string, RuntimeValue<ValueType>>): RuntimeValue<'object'> => ({
     type: 'object',
-    value
+    value: [...value.keys()].every(key => key === key.normalize('NFC'))
+        ? value
+        : new Map([...value].map(([key, entry]) => [key.normalize('NFC'), entry]))
 });
 
-export const makeSensitiveValue = (value: RuntimeValue<ValueType>): RuntimeValue<ValueType> => ({
+/**
+ * The name go-cty gives a value's type in a message, such as `bool` or `tuple`. A list or an object written in
+ * configuration is a tuple or an object to go-cty, and those are the names given to every list and object here.
+ *
+ * @param value the value, not sensitive.
+ * @returns the type's name.
+ */
+export function friendlyTypeName(value: RuntimeValue<ValueType>): string {
+    switch (value.type) {
+        case 'string':
+        case 'number':
+            return value.type;
+        case 'boolean':
+            return 'bool';
+        case 'array':
+            return 'tuple';
+        case 'object':
+        case 'block':
+            return 'object';
+        case 'null':
+            return 'dynamic';
+        default:
+            throw new Error(`Value of type ${String(value.type)} has no type name`);
+    }
+}
+
+export const makeSensitiveValue =(value: RuntimeValue<ValueType>): RuntimeValue<ValueType> => ({
     type: 'sensitive' as unknown as ValueType,
     value
 });
@@ -41,6 +72,39 @@ export const unwrapSensitive = (value: RuntimeValue<ValueType>): RuntimeValue<Va
     }
     return value;
 };
+
+/**
+ * Refuses a call to a Terragrunt function with a number of arguments it does not take, in Terragrunt's own words. Its
+ * go-cty parameter is variadic, so HCL counts nothing and the function counts for itself.
+ *
+ * @param args the call's arguments.
+ * @param counts the numbers of arguments the function takes, in increasing order.
+ * @param name the function.
+ */
+export function expectParams(args: RuntimeValue<ValueType>[], counts: number[], name: string): void {
+    if (counts.includes(args.length)) return;
+    const expected = counts.length < 3 ? counts.join(' or ') : `${counts.slice(0, -1).join(', ')}, or ${counts.at(-1)}`;
+    throw new Error(`Expected ${expected} params for function ${name}, but got ${args.length}`);
+}
+
+/**
+ * Orders two strings as Go compares them, and so as go-cty orders an object's attributes and a map's keys: by their
+ * UTF-8 bytes, which is the order of their code points. JavaScript compares UTF-16 code units instead, which puts a
+ * character above U+FFFF, stored as a surrogate pair, before one from U+E000 to U+FFFF.
+ */
+export function compareStrings(left: string, right: string): number {
+    const length = Math.min(left.length, right.length);
+    for (let index = 0; index < length; index++) {
+        const leftUnit = left.charCodeAt(index);
+        const rightUnit = right.charCodeAt(index);
+        if (leftUnit === rightUnit) continue;
+        const leftSurrogate = leftUnit >= 0xd800 && leftUnit <= 0xdfff;
+        const rightSurrogate = rightUnit >= 0xd800 && rightUnit <= 0xdfff;
+        if (leftSurrogate !== rightSurrogate) return leftSurrogate ? 1 : -1;
+        return leftUnit - rightUnit;
+    }
+    return left.length - right.length;
+}
 
 /**
  * Marks the values of a document read from a file sops could not decrypt: every string sops stored encrypted, which
@@ -138,7 +202,7 @@ export function runtimeToPlain(value: RuntimeValue<ValueType>): unknown {
         case 'block': {
             const map = value.value as Map<string, RuntimeValue<ValueType>>;
             const out: Record<string, unknown> = {};
-            for (const key of [...map.keys()].sort()) out[key] = runtimeToPlain(map.get(key)!);
+            for (const key of [...map.keys()].sort(compareStrings)) out[key] = runtimeToPlain(map.get(key)!);
             return out;
         }
         default: {
@@ -171,22 +235,96 @@ export function coerceToString(value: RuntimeValue<ValueType>): string {
     }
 }
 
-export function coerceToBool(value: RuntimeValue<ValueType>): boolean {
+/**
+ * A value converted to a bool as HCL converts one (cty's conversion): a bool as it is, null as null, and the strings
+ * "true" and "1", "false" and "0". Nothing else converts: no other string, number or collection.
+ *
+ * @returns the bool, or null for null.
+ * @throws Error saying why the value is not a bool, in cty's words.
+ */
+export function convertToBool(value: RuntimeValue<ValueType>): boolean | null {
     switch (value.type) {
         case 'boolean':
             return Boolean(value.value);
-        case 'string':
-            return String(value.value).length > 0;
-        case 'number':
-            return Number(value.value) !== 0;
+        case 'null':
+            return null;
+        case 'string': {
+            const text = String(value.value);
+            if (text === 'true' || text === '1') return true;
+            if (text === 'false' || text === '0') return false;
+            const lower = text.toLowerCase();
+            if (lower === 'true' || lower === 'false') {
+                throw new Error(`a bool is required; to convert from string, use lowercase "${lower}"`);
+            }
+            throw new Error('a bool is required');
+        }
         case 'array':
-            return (value.value as RuntimeValue<ValueType>[]).length > 0;
+            return failBool('tuple');
         case 'object':
         case 'block':
-            return (value.value as Map<string, RuntimeValue<ValueType>>).size > 0;
-        case 'null':
-            return false;
+            return failBool('object');
         default:
-            return false;
+            return failBool(value.type);
     }
+}
+
+function failBool(type: string): never {
+    throw new Error(`bool required, but have ${type}`);
+}
+
+/**
+ * A condition, of `?:` or of a template's `if`, as HCL takes it.
+ *
+ * @throws Error when the condition is null or does not convert to a bool, in HCL's words.
+ */
+export function conditionValue(value: RuntimeValue<ValueType>): boolean {
+    if (value.type === 'null') throw new Error('The condition value is null. Conditions must either be true or false.');
+    try {
+        return convertToBool(value) as boolean;
+    } catch {
+        throw new Error('The condition expression must be of type bool.');
+    }
+}
+
+/**
+ * An operand of `&&`, `||` or `!` converted to a bool as HCL converts it.
+ *
+ * @param side which operand it is, as HCL names it.
+ * @returns the bool, or null for null.
+ * @throws Error naming the operand when it does not convert, in HCL's words.
+ */
+export function operandBool(value: RuntimeValue<ValueType>, side: 'left' | 'right' | 'unary'): boolean | null {
+    try {
+        return convertToBool(value);
+    } catch (error) {
+        throw new Error(`Unsuitable value for ${side} operand: ${(error as Error).message}.`);
+    }
+}
+
+/** HCL refuses null where it is all `!`, `&&` or `||` has to decide by. */
+export const NULL_OPERAND = 'Error during operation: argument must not be null.';
+
+/** An operand of `&&` or `||` once evaluated and converted: a bool, null, or what evaluating it threw. */
+export type LogicalOperand = boolean | null | { error: unknown };
+
+/**
+ * `left && right` or `left || right` as HCL decides it, once both operands are evaluated and converted. A known
+ * operand that is false (for `&&`, null counting as false) or true (for `||`) decides, and what evaluating the other
+ * threw is dropped.
+ *
+ * @throws what an operand threw when the result needs it; an Error when null is all there is to decide by.
+ */
+export function logicalOperation(operator: '&&' | '||', left: LogicalOperand, right: LogicalOperand): boolean {
+    const known = (operand: LogicalOperand): operand is boolean | null => operand === null || typeof operand === 'boolean';
+    const decides = (operand: LogicalOperand) => known(operand) && (operator === '&&' ? operand !== true : operand === true);
+    if (!known(left)) {
+        if (decides(right)) return operator === '||';
+        throw left.error;
+    }
+    if (decides(left)) return operator === '||';
+    if (!known(right)) throw right.error;
+    if (decides(right)) return operator === '||';
+    // Neither decides: both true for &&; for ||, each false or null.
+    if (left === null || right === null) throw new Error(NULL_OPERAND);
+    return operator === '&&';
 }

@@ -9,16 +9,23 @@ import { checkTypeConstraint, readInlineFunction, readTypeConstraint, synthesize
 import { parseHclSyntax } from './syntax';
 import { Schema } from './Schema';
 import { encryptedSopsDocument } from './sops';
-import type { FunctionContext, FunctionDefinition, RuntimeValue, ValueType } from './model';
+import type { FunctionArity, FunctionContext, FunctionDefinition, RuntimeValue, ValueType } from './model';
 import {
-	coerceToBool,
 	coerceToString,
+	compareStrings,
+	conditionValue,
+	convertToBool,
+	type LogicalOperand,
+	logicalOperation,
+	NULL_OPERAND,
+	operandBool,
 	convertToRuntimeValue,
 	makeArrayValue,
 	makeBooleanValue,
 	makeNullValue,
 	makeNumberValue,
 	makeObjectValue,
+	makeSensitiveValue,
 	makeStringValue,
 	runtimeToPlain,
 	unwrapSensitive
@@ -147,6 +154,71 @@ function nodeRange(node: TNode): Range | undefined {
 	};
 }
 
+/** The variables a `locals` block can read, as Terragrunt names them. */
+const LOCALS_ROOTS = ['local', 'include', 'feature', 'values'];
+
+/** The variable each kind of reference node reads, for the kinds whose variable the grammar fixes. */
+const REFERENCE_ROOTS: Record<string, string> = {
+	local_reference: 'local',
+	dependency_reference: 'dependency',
+	module_reference: 'module',
+	terraform_reference: 'terraform',
+	var_reference: 'var',
+	data_reference: 'data',
+	path_reference: 'path'
+};
+
+/** Nodes that name something rather than read a variable: a for expression's variables, members, functions and keys. */
+const NAMING_NODES = new Set(['identifier', 'function_identifier', 'attribute_identifier', 'type_parameters']);
+
+/**
+ * The variables an expression reads, by the name each is rooted at, in the order they are written: what HCL's
+ * `Expression.Variables()` gives. A for expression's own variables are not among them, inside it, whatever they are
+ * called; its collection is read outside them.
+ *
+ * @param node the expression.
+ * @param bound the names the for expressions around it bind.
+ * @returns the root names, one per reference.
+ */
+function variableRoots(node: TNode, bound: ReadonlySet<string> = new Set()): string[] {
+	const root = REFERENCE_ROOTS[node.type]
+		?? (node.type === 'reference' || node.type === 'traversal_reference' ? String(node.value ?? '') : undefined);
+	if (root !== undefined) return bound.has(root) ? [] : [root];
+	const children = node.children ?? [];
+	if (node.type === 'list_comprehension' || node.type === 'map_comprehension' || node.type === 'for_expression' || node.type === 'for_directive') {
+		const names = children.filter(child => child.type === 'identifier').map(child => String(child.value ?? ''));
+		const [collection, ...body] = children.filter(child => child.type !== 'identifier');
+		const inner = new Set([...bound, ...names]);
+		return [
+			...(collection ? variableRoots(collection, bound) : []),
+			...body.flatMap(child => variableRoots(child, inner))
+		];
+	}
+	return children.filter(child => !NAMING_NODES.has(child.type)).flatMap(child => variableRoots(child, bound));
+}
+
+/**
+ * Refuses a local that reads a variable a `locals` block cannot see, as Terragrunt does before evaluating any: a
+ * dependency's outputs, `var`, `terraform` and the rest. The reference alone decides, whether or not evaluation would
+ * reach it.
+ *
+ * @param node the local's expression.
+ * @param filePath the configuration it is written in.
+ * @throws LocatedEvaluationError naming the first such variable, with one further fault for each other.
+ */
+function assertLocalReadsOnlyLocalsRoots(node: TNode, filePath: string): void {
+	const refused = [...new Set(variableRoots(node).filter(root => !LOCALS_ROOTS.includes(root)))];
+	if (refused.length === 0) return;
+	const messages = refused.map(root =>
+		`Locals can only reference these variables: ${LOCALS_ROOTS.join(', ')}. This expression references "${root}".`
+	);
+	const range = nodeRange(node);
+	if (!range) throw new Error(messages[0]);
+	const [first, ...rest] = messages.map(message => new LocatedEvaluationError(message, filePath, range));
+	first.further.push(...rest);
+	throw first;
+}
+
 export class UnreadableSopsFileError extends UnresolvedRenderValueError {
 	constructor(file: string, reason: string) {
 		super(`sops could not decrypt ${file}: ${reason}`);
@@ -190,12 +262,15 @@ export class UnresolvedDependencyError extends UnresolvedRenderValueError {
  *
  * `kind` says what the span is: an `expression`, or the `name` of an attribute, whose value is the one bound to it.
  * A name's value is always also the value of the expression beside it, so a caller marking spans can leave names
- * out and lose nothing, while one answering a hover still has them.
+ * out and lose nothing, while one answering a hover still has them. The `elements` of a `for` expression's
+ * collection are the values its variable takes, as a list in the order HCL visits them, gathered over every element
+ * of the `for` expressions around it: they are not the collection's value, which is its `expression` span when it
+ * has one, and are for completing the variable, not for showing.
  */
 export interface EvaluatedSpan {
 	start: number;
 	end: number;
-	kind: 'name' | 'expression';
+	kind: 'name' | 'expression' | 'elements';
 	value: RuntimeValue<ValueType>;
 }
 
@@ -860,13 +935,77 @@ export class ConfigEvaluator {
 				const value = node.children?.find(child => child.type !== 'attribute_identifier');
 				if (identifier?.location && value) await add(identifier.location, 'name', value);
 			}
-			// The literal fragments of an interpolated string carry the whole string's location; the string is the span.
-			const fragment = node.type === 'string_lit' && parent?.type === 'interpolated_string';
+			// The literal fragments of an interpolated string, and the templates of a directive's branches and loop, are
+			// parts of the string; the string is the span.
+			const fragment = (node.type === 'string_lit' && parent?.type === 'interpolated_string')
+				|| (parent?.type === 'if_directive' && parent.children?.[0] !== node)
+				|| (parent?.type === 'for_directive' && parent.children?.at(-1) === node);
 			if (node.location && EXPRESSION_SPAN_TYPES.has(node.type) && !fragment) await add(node.location, 'expression', node);
 			for (const child of node.children ?? []) await visit(child, node);
 		};
 		await visit(result.scope.ast, undefined);
-		return [...spans.values()].sort((left, right) => left.start - right.start || right.end - left.end);
+		const elements = await this.forElements(result.scope);
+		return [...spans.values(), ...elements].sort((left, right) => left.start - right.start || right.end - left.end);
+	}
+
+	/**
+	 * The `elements` spans of a file: for each `for` expression, the values its variable takes. Its collection is
+	 * evaluated once for each element of every `for` expression around it, with their variables bound, so a literal
+	 * collection and one that reads an outer variable have elements as any other does. An evaluation that fails, such
+	 * as for an element an outer condition would leave out, adds nothing.
+	 *
+	 * @param scope the file's scope.
+	 * @returns one span per collection that gave any elements, in the order the file is written.
+	 */
+	private async forElements(scope: Scope): Promise<EvaluatedSpan[]> {
+		const gathered = new Map<TNode, RuntimeValue<ValueType>[]>();
+		const visit = async (node: TNode): Promise<void> => {
+			if (node.type !== 'list_comprehension' && node.type !== 'map_comprehension' && node.type !== 'for_directive') {
+				for (const child of node.children ?? []) await visit(child);
+				return;
+			}
+			const children = node.children ?? [];
+			const variables = children[1]?.type === 'identifier' ? children.slice(0, 2) : children.slice(0, 1);
+			const [collection, ...body] = children.slice(variables.length);
+			if (!collection) return;
+			await visit(collection);
+			let items: Array<[string, RuntimeValue<ValueType>]> = [];
+			let collectionValue: RuntimeValue<ValueType> | undefined;
+			try {
+				collectionValue = await this.evalNode(collection, scope);
+				if (!collectionValue.encrypted) items = iterateValue(collectionValue);
+			} catch {
+				items = [];
+			}
+			const kept = gathered.get(collection) ?? [];
+			kept.push(...items.map(([, item]) => item).filter(item => !item.encrypted));
+			gathered.set(collection, kept);
+			// A body is visited once for each element, so a for expression inside it sees that element.
+			for (const [key, item] of items) {
+				const frame = new Map<string, RuntimeValue<ValueType>>();
+				if (variables.length === 2) {
+					frame.set(String(variables[0].value ?? ''), collectionValue?.type === 'array' ? makeNumberValue(Number(key)) : makeStringValue(key));
+				}
+				frame.set(String(variables.at(-1)?.value ?? ''), item);
+				scope.comprehension.push(frame);
+				try {
+					for (const child of body) await visit(child);
+				} finally {
+					scope.comprehension.pop();
+				}
+			}
+			// With no elements to bind, a for expression inside the body still has its own collection, if it reads none.
+			if (items.length === 0) for (const child of body) await visit(child);
+		};
+		await visit(scope.ast);
+		return [...gathered]
+			.filter(([collection, values]) => collection.location && values.length > 0)
+			.map(([collection, values]) => ({
+				start: collection.location!.start.offset,
+				end: collection.location!.end.offset,
+				kind: 'elements',
+				value: makeArrayValue(values)
+			}));
 	}
 
 	private nodeWidth(node: TNode): number {
@@ -899,7 +1038,16 @@ export class ConfigEvaluator {
 			if (attrName === 'path') {
 				pathNode = child;
 			} else if (attrName === 'expose') {
-				expose = coerceToBool(await this.evalNode(requiredValueNode(child), scope));
+				// Terragrunt decodes expose as an optional bool: null is false.
+				const exposeNode = requiredValueNode(child);
+				const value = await this.evalNode(exposeNode, scope);
+				expose = this.atNode(exposeNode, scope, () => {
+					try {
+						return convertToBool(value) ?? false;
+					} catch (error) {
+						throw new Error(`Unsuitable value: ${(error as Error).message}`);
+					}
+				});
 			} else if (attrName === 'merge_strategy') {
 				mergeStrategy = readMergeStrategy(await this.evalNode(requiredValueNode(child), scope), name, scope.filePath);
 			}
@@ -1085,7 +1233,7 @@ export class ConfigEvaluator {
 		if (!skipInputs && unit.scope === scope) {
 			// Terragrunt evaluates every local of a unit and of the configurations it includes, whether anything reads it
 			// or not, and fails on a broken one. They are evaluated only once every include is read, as a local may read
-			// a dependency declared in any of them.
+			// any of them.
 			for (const owner of configurationScopes(scope)) {
 				for (const name of owner.locals.keys()) {
 					try {
@@ -1272,6 +1420,17 @@ export class ConfigEvaluator {
 						const encrypted = await encryptedSopsDocument(filePath);
 						if (encrypted !== undefined) return { content: encrypted, encrypted: true };
 					}
+					// Terragrunt decrypts with sops built in; this needs the sops program, and says so when it is missing.
+					if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+						// Offline, a file reaches here only when it holds no sops metadata to read as written.
+						const offline = this.options.readEncryptedSops
+							? '.'
+							: ', or validate offline with "hcl validate --offline" to read the file as written.';
+						throw new Error(
+							`sops_decrypt_file cannot decrypt ${filePath}: the sops program is not on PATH. ` +
+							`Install sops (https://github.com/getsops/sops/releases) and put it on PATH${offline}`
+						);
+					}
 					if (!this.options.partialRender) throw error;
 					const stderr = (error as {stderr?: unknown}).stderr;
 					const reason = typeof stderr === 'string' && stderr.trim() !== ''
@@ -1281,7 +1440,9 @@ export class ConfigEvaluator {
 				}
 			},
 			evaluateFunction: async (name: string, args: RuntimeValue<ValueType>[]) => {
-					if (!this.schema.getFunctionDefinition(name)) throw new Error(`Unknown function ${name}`);
+					const definition = this.schema.getFunctionDefinition(name);
+					if (!definition) throw new Error(`Unknown function ${name}`);
+					checkArgumentCount(name, definition.arity, args.length);
 					if (!this.schema.getFunctionRegistry().hasFunction(name)) {
 					throw new Error(`Function ${name} has no evaluator`);
 				}
@@ -1521,6 +1682,7 @@ export class ConfigEvaluator {
 
 		const node = scope.locals.get(name);
 		if (!node) throw new Error(`Undefined local value "${name}"`);
+		assertLocalReadsOnlyLocalsRoots(node, scope.filePath);
 		const evaluation = this.localResolutionPath.run(
 			[...activePath, { scope, name }],
 			() => this.evalNode(node, scope)
@@ -1847,6 +2009,71 @@ export class ConfigEvaluator {
 	}
 
 	/**
+	 * Runs a check of a value already evaluated, placing a fault it finds where the value's expression is written
+	 * rather than where the expression around it is.
+	 *
+	 * @param node the expression the value is of.
+	 * @param scope the scope of the file it is written in.
+	 * @param check the check.
+	 * @returns what the check returns.
+	 */
+	private atNode<T>(node: TNode | undefined, scope: Scope, check: () => T): T {
+		try {
+			return check();
+		} catch (error) {
+			const range = node ? nodeRange(node) : undefined;
+			if (!(error instanceof Error) || !range) throw error;
+			throw new LocatedEvaluationError(error.message, scope.filePath, range, { cause: error });
+		}
+	}
+
+	/**
+	 * `!`, `&&` or `||`, as HCL evaluates them. Each operand must convert to a bool, an operand of `&&` or `||` even
+	 * where the other decides. Both operands of `&&` and `||` are evaluated, and one that decides the result drops
+	 * what the other threw, a value not known yet or a fault.
+	 *
+	 * @param node the logical expression.
+	 * @param scope the scope of the file it is written in.
+	 * @returns its value.
+	 */
+	private async evalLogical(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
+		const operator = node.value === undefined ? '' : String(node.value);
+		const [first, second] = node.children ?? [];
+		if (operator === '!') {
+			const value = computable(await this.evalNode(first, scope));
+			const truth = this.atNode(first, scope, () => operandBool(value, 'unary'));
+			if (truth === null) throw new Error(NULL_OPERAND);
+			return makeBooleanValue(!truth);
+		}
+		if (operator !== '&&' && operator !== '||') throw new Error(`Unknown logical operator "${operator}"`);
+		const operands: LogicalOperand[] = [];
+		const invalid: LocatedEvaluationError[] = [];
+		for (const [operandNode, side] of [[first, 'left'], [second, 'right']] as const) {
+			let value: RuntimeValue<ValueType>;
+			try {
+				value = computable(await this.evalNode(operandNode, scope));
+			} catch (error) {
+				if (error instanceof Error && isDefect(error)) throw error;
+				operands.push({ error });
+				continue;
+			}
+			try {
+				operands.push(this.atNode(operandNode, scope, () => operandBool(value, side)));
+			} catch (error) {
+				if (!(error instanceof LocatedEvaluationError)) throw error;
+				invalid.push(error);
+				operands.push(null);
+			}
+		}
+		if (invalid.length > 0) {
+			const [firstInvalid, ...rest] = invalid;
+			firstInvalid.further.push(...rest);
+			throw firstInvalid;
+		}
+		return makeBooleanValue(logicalOperation(operator, operands[0], operands[1]));
+	}
+
+	/**
 	 * Evaluates every operand of an expression. One that cannot be known yet does not stop the rest, so a fault
 	 * beside it, such as `local.nope` in `"${dependency.x.outputs.y}-${local.nope}"`, is still found.
 	 *
@@ -1911,21 +2138,18 @@ export class ConfigEvaluator {
 				return this.evalInterpolatedString(node, scope);
 			case 'interpolation':
 				return this.evalNode(node.children?.[0], scope);
+			case 'if_directive':
+				return this.evalTemplateIf(node, scope);
+			case 'for_directive':
+				return this.evalTemplateFor(node, scope);
 			case 'ternary_expression': {
 				const [condition, whenTrue, whenFalse] = node.children ?? [];
-				const truth = coerceToBool(computable(await this.evalNode(condition, scope)));
+				const value = computable(await this.evalNode(condition, scope));
+				const truth = this.atNode(condition, scope, () => conditionValue(value));
 				return truth ? this.evalNode(whenTrue, scope) : this.evalNode(whenFalse, scope);
 			}
-			case 'logical_expression': {
-				const operator = node.value === undefined ? '' : String(node.value);
-				if (operator === '!') {
-					return makeBooleanValue(!coerceToBool(computable(await this.evalNode(node.children?.[0], scope))));
-				}
-				const left = coerceToBool(computable(await this.evalNode(node.children?.[0], scope)));
-				if (operator === '&&') return makeBooleanValue(left && coerceToBool(computable(await this.evalNode(node.children?.[1], scope))));
-				if (operator === '||') return makeBooleanValue(left || coerceToBool(computable(await this.evalNode(node.children?.[1], scope))));
-				throw new Error(`Unknown logical operator "${operator}"`);
-			}
+			case 'logical_expression':
+				return this.evalLogical(node, scope);
 			case 'comparison_expression':
 				return this.evalComparison(node, scope);
 			case 'arithmetic_expression':
@@ -2049,15 +2273,64 @@ export class ConfigEvaluator {
 	}
 
 	private async evalInterpolatedString(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
-		const parts = await this.settleOperands((node.children ?? []).flatMap((child): (() => Promise<string>)[] => {
-			if (child.type === 'string_lit') return [async () => String(child.value ?? '')];
-			if (child.type === 'interpolation') return [async () => coerceToString(computable(await this.evalNode(child.children?.[0], scope)))];
-			if (child.type === 'if_directive' || child.type === 'for_directive' || child.type === 'else_directive' || child.type === 'endif_directive') {
-				return [async () => { throw new Error('Template directives inside quoted strings are not supported'); }];
+		const parts = await this.settleOperands((node.children ?? []).map(child => {
+			if (child.type === 'string_lit') return async () => String(child.value ?? '');
+			if (child.type === 'interpolation' || child.type === 'if_directive' || child.type === 'for_directive') {
+				return async () => coerceToString(computable(await this.evalNode(child, scope)));
 			}
-			return [];
+			throw new Error(`A template cannot hold a ${child.type}`);
 		}));
 		return makeStringValue(parts.join(''));
+	}
+
+	/**
+	 * Evaluates a template's `%{ if }` as HCL evaluates the conditional it lowers one to: the condition converts to a
+	 * bool as any condition does, and the template of the branch it takes is rendered.
+	 *
+	 * @param node the if_directive: its condition, and the template of each branch.
+	 * @param scope the scope of the file it is written in.
+	 * @returns the rendered branch.
+	 */
+	private async evalTemplateIf(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
+		const [condition, whenTrue, whenFalse] = node.children ?? [];
+		const value = computable(await this.evalNode(condition, scope));
+		const truth = this.atNode(condition, scope, () => conditionValue(value));
+		return this.evalNode(truth ? whenTrue : whenFalse, scope);
+	}
+
+	/**
+	 * Evaluates a template's `%{ for }` as HCL evaluates the for expression it lowers one to, joined: the template it
+	 * repeats is rendered for each element of the collection in the collection's order, with the value variable
+	 * bound to the element and the key variable to its index or key, and the renderings are concatenated.
+	 *
+	 * @param node the for_directive: its key variable if it has one, its value variable, the collection and the
+	 *   template it repeats.
+	 * @param scope the scope of the file it is written in.
+	 * @returns the concatenated renderings, sensitive when the collection is.
+	 * @throws Error at the collection when it is null or cannot be iterated, in HCL's words.
+	 */
+	private async evalTemplateFor(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
+		const children = node.children ?? [];
+		const variables = children.slice(0, children.length - 2);
+		const [collection, template] = children.slice(variables.length);
+		const marked = computable(await this.evalNode(collection, scope));
+		const collectionValue = unwrapSensitive(marked);
+		const items = this.atNode(collection, scope, () => iterateValue(collectionValue));
+		let rendered = '';
+		for (const [key, item] of items) {
+			const frame = new Map<string, RuntimeValue<ValueType>>();
+			if (variables.length === 2) {
+				frame.set(String(variables[0].value ?? ''), collectionValue.type === 'array' ? makeNumberValue(Number(key)) : makeStringValue(key));
+			}
+			frame.set(String(variables[variables.length - 1].value ?? ''), item);
+			scope.comprehension.push(frame);
+			try {
+				rendered += coerceToString(computable(await this.evalNode(template, scope)));
+			} finally {
+				scope.comprehension.pop();
+			}
+		}
+		return marked === collectionValue ? makeStringValue(rendered) : makeSensitiveValue(makeStringValue(rendered));
 	}
 
 	private async evalComparison(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
@@ -2195,11 +2468,26 @@ export class ConfigEvaluator {
 
 	private async evalFunctionCall(node: TNode, scope: Scope): Promise<RuntimeValue<ValueType>> {
 		const name = String(node.value ?? '');
-		const args = (node.children ?? []).filter(child => child.type !== 'function_identifier');
+
+		// Inline functions resolve before built-ins. A name may not be both:
+		// definition-time shadow checking rejects that, so the order below can
+		// never mask a built-in.
+		// An inline function computes from its arguments in a body this evaluator does not see into, so it is given no
+		// value sops left encrypted.
+		const inline = this.findInlineFunction(scope, name);
+		if (inline) {
+			const args = await this.evalCallArguments(await this.callArguments(node, scope), scope);
+			return this.callInlineFunction(inline, args.map(computable));
+		}
+
+		const definition = this.schema.getFunctionDefinition(name);
+		if (!definition) throw new Error(`Unknown function "${name}"`);
+		const args = await this.callArguments(node, scope);
+		checkArgumentCount(name, definition.arity, args.length);
 
 		if (name === 'can') {
 			try {
-				await this.evalNode(args[0], scope);
+				await this.evalCallArgument(args[0], scope);
 				return makeBooleanValue(true);
 			} catch (error) {
 				if (error instanceof UnresolvedRenderValueError) throw error;
@@ -2208,26 +2496,19 @@ export class ConfigEvaluator {
 		}
 
 		if (name === 'try') {
+			if (args.length === 0) throw new Error('at least one argument is required');
+			const failures: string[] = [];
 			for (const arg of args) {
 				try {
-					return await this.evalNode(arg, scope);
+					return await this.evalCallArgument(arg, scope);
 				} catch (error) {
 					if (error instanceof UnresolvedRenderValueError) throw error;
-					// fall through to the next candidate
+					failures.push(error instanceof Error ? error.message : String(error));
 				}
 			}
-			return makeNullValue();
+			throw new Error(`no expression succeeded:\n${failures.map(failure => `- ${failure}\n`).join('')}At least one expression must produce a successful result.`);
 		}
 
-		// Inline functions resolve before built-ins. A name may not be both:
-		// definition-time shadow checking rejects that, so the order below can
-		// never mask a built-in.
-		// An inline function computes from its arguments in a body this evaluator does not see into, so it is given no
-		// value sops left encrypted.
-		const inline = this.findInlineFunction(scope, name);
-		if (inline) return this.callInlineFunction(inline, (await this.evalOperands(args, scope)).map(computable));
-
-		if (!this.schema.getFunctionDefinition(name)) throw new Error(`Unknown function "${name}"`);
 		if (name === 'deep_merge' && !this.options.experiments?.includes('deep-merge')) {
 			throw new Error('deep_merge requires the deep-merge experiment to be enabled');
 		}
@@ -2235,9 +2516,42 @@ export class ConfigEvaluator {
 			throw new Error(`Function "${name}" has no evaluator`);
 		}
 
-		const evaluatedArgs = functionArguments(name, await this.evalOperands(args, scope));
+		const evaluatedArgs = functionArguments(name, await this.evalCallArguments(args, scope));
 		const context = await this.makeContext(scope);
 		return this.schema.getFunctionRegistry().evaluateFunction(name, evaluatedArgs, context);
+	}
+
+	/**
+	 * A call's arguments as HCL counts them: the expressions written in it, and, for a final argument expanded with
+	 * `...`, each element of the list, set or tuple it evaluates to, carrying the collection's sensitivity.
+	 */
+	private async callArguments(node: TNode, scope: Scope): Promise<CallArgument[]> {
+		const written: CallArgument[] = (node.children ?? [])
+			.filter(child => child.type !== 'function_identifier')
+			.map(expression => ({ expression }));
+		const final = written.at(-1);
+		if (!final || !('expression' in final) || final.expression.type !== 'variadic_arguments') return written;
+
+		const collection = await this.evalNode(final.expression.children?.[0], scope);
+		const sensitive = (collection.type as string) === 'sensitive';
+		const expanded = unwrapSensitive(collection);
+		if (expanded.type === 'null') {
+			throw new Error('Invalid expanding argument value; The expanding argument (indicated by ...) must not be null.');
+		}
+		if (expanded.type !== 'array') {
+			throw new Error('Invalid expanding argument value; The expanding argument (indicated by ...) must be of a tuple, list, or set type.');
+		}
+		const elements = (expanded.value as RuntimeValue<ValueType>[])
+			.map(value => ({ value: sensitive ? makeSensitiveValue(value) : value }));
+		return [...written.slice(0, -1), ...elements];
+	}
+
+	private async evalCallArgument(argument: CallArgument, scope: Scope): Promise<RuntimeValue<ValueType>> {
+		return 'value' in argument ? argument.value : this.evalNode(argument.expression, scope);
+	}
+
+	private async evalCallArguments(args: CallArgument[], scope: Scope): Promise<RuntimeValue<ValueType>[]> {
+		return this.settleOperands(args.map(argument => () => this.evalCallArgument(argument, scope)));
 	}
 
 	/**
@@ -2539,7 +2853,9 @@ function makeRootScope(filePath: string, content: string, workspaceRoot = path.d
 
 /**
  * The elements of a for expression's collection, in the order HCL visits them: a list by index, an object by key in
- * lexical order, as `keys` and `values` give them.
+ * the order of their bytes, as `keys` and `values` give them.
+ *
+ * @throws Error when the collection is null or is not a collection, in HCL's words.
  */
 function iterateValue(value: RuntimeValue<ValueType>): Array<[string, RuntimeValue<ValueType>]> {
 	const items: Array<[string, RuntimeValue<ValueType>]> = [];
@@ -2547,9 +2863,12 @@ function iterateValue(value: RuntimeValue<ValueType>): Array<[string, RuntimeVal
 		(value.value as RuntimeValue<ValueType>[]).forEach((item, index) => items.push([String(index), item]));
 	} else if (value.type === 'object' || value.type === 'block') {
 		const map = value.value as Map<string, RuntimeValue<ValueType>>;
-		for (const key of [...map.keys()].sort()) items.push([key, map.get(key)!]);
+		for (const key of [...map.keys()].sort(compareStrings)) items.push([key, map.get(key)!]);
+	} else if (value.type === 'null') {
+		throw new Error('A null value cannot be used as the collection in a \'for\' expression.');
 	} else {
-		throw new Error(`Comprehension collection must be a list or object, got ${value.type}`);
+		const type = value.type === 'boolean' ? 'bool' : value.type;
+		throw new Error(`A value of type ${type} cannot be used as the collection in a 'for' expression.`);
 	}
 	return items;
 }
@@ -2560,11 +2879,13 @@ function iterateValue(value: RuntimeValue<ValueType>): Array<[string, RuntimeVal
  * @throws Error when the clause is null or does not convert to a bool, as HCL refuses it.
  */
 function comprehensionCondition(value: RuntimeValue<ValueType>): boolean {
-	if (value.type === 'boolean') return Boolean(value.value);
 	if (value.type === 'null') throw new Error('The "if" clause of a for expression must not be null');
-	if (value.type === 'string' && (value.value === 'true' || value.value === 'false')) return value.value === 'true';
-	const shown = value.type === 'string' ? ` ${JSON.stringify(value.value)}` : '';
-	throw new Error(`The "if" clause of a for expression must be a bool, got ${value.type}${shown}`);
+	try {
+		return convertToBool(value) as boolean;
+	} catch {
+		const shown = value.type === 'string' ? ` ${JSON.stringify(value.value)}` : '';
+		throw new Error(`The "if" clause of a for expression must be a bool, got ${value.type}${shown}`);
+	}
 }
 
 /**
@@ -2769,6 +3090,29 @@ function computable(value: RuntimeValue<ValueType>): RuntimeValue<ValueType> {
  * @throws EncryptedSopsValueError when the function would compute from an encrypted value: any function given one
  *   other than the decoders, and a selector given one as a plain argument rather than inside a collection.
  */
+/** An argument of a function call: an expression written in it, or an element of its expanded final argument. */
+type CallArgument = { expression: TNode } | { value: RuntimeValue<ValueType> };
+
+/**
+ * Refuses a call whose argument count go-cty's parameters do not allow, as HCL does before it evaluates any argument.
+ *
+ * @param name the function.
+ * @param arity its go-cty parameters.
+ * @param count the call's arguments, an expanded final argument counted as its elements.
+ * @throws when there are fewer arguments than parameters, or more and no variadic parameter takes them.
+ */
+function checkArgumentCount(name: string, arity: FunctionArity, count: number): void {
+	if (count < arity.params.length) {
+		throw new Error(
+			`Not enough function arguments; Function "${name}" expects${arity.variadic ? ' at least' : ''} ${arity.params.length} argument(s). `
+			+ `Missing value for "${arity.params[count]}".`
+		);
+	}
+	if (!arity.variadic && count > arity.params.length) {
+		throw new Error(`Too many function arguments; Function "${name}" expects only ${arity.params.length} argument(s).`);
+	}
+}
+
 function functionArguments(name: string, args: RuntimeValue<ValueType>[]): RuntimeValue<ValueType>[] {
 	if (ENCRYPTED_DOCUMENT_DECODERS.has(name)) return args;
 	if (COLLECTION_SELECTORS.has(name)) {

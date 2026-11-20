@@ -3,10 +3,12 @@ import path from 'node:path';
 import type { CompletionItem, Diagnostic, DocumentLink, LocationLink, MarkupContent, Position } from 'vscode-languageserver';
 import { URI } from 'vscode-uri';
 
+import { makeStringValue } from './functions/utils';
 import { readInlineFunction, synthesizeDefinition, tokenToNode } from './inline-functions';
 import type { FunctionContext, FunctionDefinition, ResolvedReference, RuntimeValue, TerragruntConfig, TokenType, ValueType } from './model';
 import { Token } from './model';
 import type { ModuleFileError, ModuleType, ModuleVariable } from './module-variables';
+import { conditionValue } from './functions/utils';
 import { TextChange } from './text-change';
 import { mergeObjectTypes, ValueTypeReader } from './value-types';
 import type { EvaluatedSpan } from './Evaluator';
@@ -382,22 +384,17 @@ export class ParsedDocument {
 	public setEvaluatedSpans(spans: EvaluatedSpan[]): void {
 		if (!this.parsed) return;
 		const names = new Map(spans.filter(span => span.kind === 'name').map(span => [`${span.start}:${span.end}`, span.value]));
-		const expressions = new Map(spans.filter(span => span.kind === 'expression').map(span => [`${span.start}:${span.end}`, span.value]));
+		const collections = new Map(spans.filter(span => span.kind === 'elements').map(span => [`${span.start}:${span.end}`, span.value]));
 		const forExpressions = new Map<number, EvaluatedForExpression>();
 		const visit = (node: any): void => {
 			if ((node.type === 'list_comprehension' || node.type === 'map_comprehension') && node.location) {
 				const children = node.children ?? [];
 				const variables = children[1]?.type === 'identifier' ? children.slice(0, 2) : children.slice(0, 1);
 				const collection = children[variables.length]?.location;
-				const value = collection && expressions.get(`${collection.start.offset}:${collection.end.offset}`);
-				// The elements in the order HCL visits them: an object's by key in lexical order.
-				const map = value?.type === 'object' || value?.type === 'block' ? value.value as Map<string, RuntimeValue<ValueType>> : undefined;
-				const elements = value?.type === 'array'
-					? value.value as RuntimeValue<ValueType>[]
-					: map
-						? [...map.keys()].sort().map(key => map.get(key)!)
-						: undefined;
-				if (elements) forExpressions.set(node.location.start.offset, { variable: String(variables.at(-1)?.value ?? ''), elements });
+				const elements = collection && collections.get(`${collection.start.offset}:${collection.end.offset}`);
+				if (elements?.type === 'array') {
+					forExpressions.set(node.location.start.offset, { variable: String(variables.at(-1)?.value ?? ''), elements: elements.value as RuntimeValue<ValueType>[] });
+				}
 			}
 			for (const child of node.children ?? []) visit(child);
 		};
@@ -650,41 +647,38 @@ export class ParsedDocument {
 				return await this.schema.getFunctionRegistry().evaluateFunction(funcName, args, context);
 			}
 			case 'interpolated_string': {
-				// Handle interpolated strings by evaluating each child and concatenating
+				// Handle interpolated strings by evaluating each child and concatenating. A part with no value here,
+				// such as a template directive, leaves the string with none, rather than with the text of the rest.
 				const parts: string[] = [];
 				for (const child of node.children) {
 					const evaluated = await this.evaluateValue(child);
-					if (evaluated) {
-						parts.push(this.coerceToString(evaluated));
-					}
+					if (!evaluated) return undefined;
+					parts.push(this.coerceToString(evaluated));
 				}
-				return {
-					type: 'string',
-					value: parts.join('')
-				};
+				return makeStringValue(parts.join(''));
 			}
 
 			case 'interpolation': {
 				if (node.children.length > 0) {
 					const evaluated = await this.evaluateValue(node.children[0]);
 					if (evaluated) {
-						return {
-							type: 'string',
-							value: this.coerceToString(evaluated)
-						};
+						return makeStringValue(this.coerceToString(evaluated));
 					}
 				}
-				return {
-					type: 'string',
-					value: ''
-				};
+				return makeStringValue('');
 			}
 			case 'ternary_expression': {
 				const [condition, trueExpr, falseExpr] = node.children;
 				const condValue = await this.evaluateValue(condition);
 				if (!condValue) return undefined;
 
-				const condBool = this.coerceToBool(condValue);
+				// A condition HCL refuses has no value to show.
+				let condBool: boolean;
+				try {
+					condBool = conditionValue(condValue);
+				} catch {
+					return undefined;
+				}
 				return condBool ?
 					await this.evaluateValue(trueExpr) :
 					await this.evaluateValue(falseExpr);
@@ -701,10 +695,7 @@ export class ParsedDocument {
 				return this.evaluateComparison(leftValue, rightValue, op.value);
 			}
 			case 'string_lit': {
-				return {
-					type: 'string',
-					value: String(node.value ?? '')
-				};
+				return makeStringValue(String(node.value ?? ''));
 			}
 
 			default: {
@@ -716,10 +707,7 @@ export class ParsedDocument {
 	private evaluateLiteral(node: Token): RuntimeValue<ValueType> | undefined {
 		switch (node.type) {
 			case 'string_lit': {
-				return {
-					type: 'string',
-					value: String(node.value ?? '')
-				};
+				return makeStringValue(String(node.value ?? ''));
 			}
 			case 'number_lit': {
 				return {
@@ -744,29 +732,6 @@ export class ParsedDocument {
 		return undefined;
 	}
 
-	private coerceToBool(value: RuntimeValue<ValueType>): boolean {
-		switch (value.type) {
-			case 'boolean': {
-				return Boolean(value.value);
-			}
-			case 'string': {
-				return typeof value.value === 'string' && value.value.length > 0;
-			}
-			case 'number': {
-				return value.value !== 0;
-			}
-			case 'array': {
-				return Array.isArray(value.value) && value.value.length > 0;
-			}
-			case 'object':
-			case 'block': {
-				return value.value instanceof Map && value.value.size > 0;
-			}
-			default: {
-				return false;
-			}
-		}
-	}
 	private coerceToString(value: RuntimeValue<ValueType>): string {
 		switch (value.type) {
 			case 'string':
@@ -913,10 +878,7 @@ export class ParsedDocument {
 			}
 		}
 
-		return {
-			type: 'string',
-			value: parts.join('')
-		};
+		return makeStringValue(parts.join(''));
 	}
 	private evaluateComparison(
 		left: RuntimeValue<ValueType> | undefined,
@@ -982,7 +944,7 @@ export class ParsedDocument {
 						}
 					};
 
-					const args = parts.slice(1).map(part => ({ type: 'string' as const, value: part }));
+					const args = parts.slice(1).map(makeStringValue);
 					const result = await registry.evaluateFunction(parts[0], args, context);
 					if (result) {
 						return { value: result, source: this.uri, found: true };

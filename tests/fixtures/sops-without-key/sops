@@ -1,0 +1,4 @@
+#!/bin/sh
+# sops on a machine without access to the key: every decrypt fails as sops reports it.
+echo "Failed to get the data key required to decrypt the SOPS file." >&2
+exit 1

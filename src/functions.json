@@ -5,6 +5,7 @@
 			"name": "get_terragrunt_dir",
 			"description": "Gets the directory containing the Terragrunt configuration file.\n\n* Returns the absolute path to the directory containing the Terragrunt configuration.\n* Useful for constructing paths relative to the Terragrunt configuration file.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -23,6 +24,7 @@
 			"name": "get_terraform_commands_that_need_vars",
 			"description": "Gets the list of Terraform commands that accept input variables.\n\n* Returns a list of Terraform commands that can use input variables.\n* Useful for conditionally applying variable files.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -48,6 +50,7 @@
 			"name": "get_terraform_commands_that_need_locking",
 			"description": "Gets the list of Terraform commands that use state locking.\n\n* Returns a list of Terraform commands that use state locking.\n* Useful for managing state lock behavior.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -86,6 +89,7 @@
 					}
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"string"
@@ -113,6 +117,7 @@
 					}
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"string"
@@ -153,6 +158,7 @@
 					"description": "Default value to return if the file doesn't exist"
 				}
 			],
+			"arity": { "params": [""], "variadic": true },
 			"returnType": {
 				"types": [
 					"object"
@@ -168,6 +174,7 @@
 			"name": "get_terraform_command",
 			"description": "Gets the current Terraform command being executed.\n\n* Returns the name of the Terraform command that Terragrunt is running.\n* Useful for conditional logic based on the command being run.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -197,6 +204,7 @@
 			"name": "get_terraform_cli_args",
 			"description": "Gets the command line arguments passed to Terraform.\n\n* Returns the list of arguments that will be passed to Terraform.\n* Useful for inspecting or modifying Terraform command arguments.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -229,6 +237,7 @@
 					"description": "The default value to return if the environment variable is not set"
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"string"
@@ -244,6 +253,7 @@
 			"name": "get_platform",
 			"description": "Gets the current operating system platform.\n\n* Returns the current operating system platform (e.g., 'windows', 'darwin', 'linux').\n* Useful for platform-specific configurations.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -266,6 +276,7 @@
 			"name": "get_repo_root",
 			"description": "Gets the root directory of the Git repository.\n\n* Returns the absolute path to the root of the current Git repository.\n* Useful for referencing files relative to the repository root.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -277,46 +288,6 @@
 			},
 			"examples": [
 				"locals {\n  repo_root = get_repo_root()\n}"
-			],
-			"deprecated": false
-		},
-		{
-			"name": "regex_replace",
-			"description": "Performs regular expression replacement on a string.\n\n* Replaces all matches of a regular expression with a replacement string.\n* Useful for string manipulation and formatting.",
-			"parameters": [
-				{
-					"name": "string",
-					"types": [
-						"string"
-					],
-					"required": true,
-					"description": "The input string to perform replacement on"
-				},
-				{
-					"name": "pattern",
-					"types": [
-						"string"
-					],
-					"required": true,
-					"description": "The regular expression pattern to match"
-				},
-				{
-					"name": "replacement",
-					"types": [
-						"string"
-					],
-					"required": true,
-					"description": "The string to replace matches with"
-				}
-			],
-			"returnType": {
-				"types": [
-					"string"
-				],
-				"description": "String with replacements applied"
-			},
-			"examples": [
-				"locals {\n  cleaned_path = regex_replace(path_relative_to_include(), \"/\", \"-\")\n}"
 			],
 			"deprecated": false
 		},
@@ -333,6 +304,7 @@
 					"description": "The YAML string to decode"
 				}
 			],
+			"arity": { "params": ["src"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string",
@@ -367,6 +339,7 @@
 					"description": "The value to encode as YAML"
 				}
 			],
+			"arity": { "params": ["value"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -391,6 +364,7 @@
 					"description": "The JSON string to decode"
 				}
 			],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string",
@@ -425,6 +399,7 @@
 					"description": "The value to encode as JSON"
 				}
 			],
+			"arity": { "params": ["val"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -452,6 +427,7 @@
 					}
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"object"
@@ -467,6 +443,7 @@
 			"name": "get_path_from_repo_root",
 			"description": "Gets the path relative to the repository root.\n\n* Returns the relative path from the repository root to the current configuration.\n* Useful for generating paths based on repository structure.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -482,6 +459,7 @@
 			"name": "get_path_to_repo_root",
 			"description": "Gets the path to the repository root.\n\n* Returns the relative path from the current configuration to the repository root.\n* Useful for referencing files at the repository root.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -506,6 +484,7 @@
 					"description": "The path to extract the basename from"
 				}
 			],
+			"arity": { "params": ["path"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -530,6 +509,7 @@
 					"description": "The path to extract the directory from"
 				}
 			],
+			"arity": { "params": ["path"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -551,10 +531,11 @@
 						"object"
 					],
 					"required": false,
-					"description": "Maps or objects to merge. With none, the result is an empty object",
+					"description": "Maps or objects to merge. A null adds nothing; with none, the result is an empty object",
 					"variadic": true
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"object"
@@ -583,6 +564,7 @@
 					"variadic": true
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"string",
@@ -619,6 +601,7 @@
 					"description": "Fallback value if the file is not found"
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"string"
@@ -643,6 +626,7 @@
 					"description": "Name of the include block to base the relative path on (required if multiple include blocks exist)"
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"string"
@@ -667,6 +651,7 @@
 					"description": "Name of the include block to base the parent directory on (required if multiple include blocks exist)"
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"string"
@@ -685,6 +670,7 @@
 			"name": "get_original_terragrunt_dir",
 			"description": "Returns the directory where the original Terragrunt configuration file lives. This is primarily useful when one Terragrunt config is being read from another.\n\n* Returns the absolute path to where the original terragrunt.hcl file lives.\n* Useful when one Terragrunt config is being read from another config file.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -701,6 +687,7 @@
 			"name": "get_terraform_commands_that_need_input",
 			"description": "Gets the list of Terraform commands that accept the -input parameter.\n\n* Returns a list of Terraform commands that accept the -input=(true or false) parameter.\n* Useful for configuring commands that should run non-interactively.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -723,6 +710,7 @@
 			"name": "get_terraform_commands_that_need_parallelism",
 			"description": "Gets the list of Terraform commands that accept the -parallelism parameter.\n\n* Returns a list of Terraform commands that can have their parallelism modified.\n* Useful for controlling resource creation parallelism.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -743,6 +731,7 @@
 			"name": "get_aws_account_alias",
 			"description": "Returns the AWS account alias associated with the current credentials.\n\n* Returns the alias of the current AWS account.\n* Returns empty string if alias cannot be found.\n* Value can change during parsing of HCL code.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -756,6 +745,7 @@
 			"name": "get_aws_account_id",
 			"description": "Returns the AWS account ID associated with the current credentials.\n\n* Returns the ID of the current AWS account.\n* Value can change during parsing of HCL code, for example after evaluation of iam_role attribute.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -772,6 +762,7 @@
 			"name": "get_aws_caller_identity_arn",
 			"description": "Returns the ARN of the AWS identity associated with the current credentials.\n\n* Returns the ARN of the current AWS identity.\n* Value can change during parsing of HCL code, for example after evaluation of iam_role attribute.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -788,6 +779,7 @@
 			"name": "get_aws_caller_identity_user_id",
 			"description": "Returns the UserId of the AWS identity associated with the current credentials.\n\n* Returns the UserId of the current AWS identity.\n* Value can change during parsing of HCL code, for example after evaluation of iam_role attribute.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -801,6 +793,7 @@
 			"name": "get_working_dir",
 			"description": "Returns the absolute path where Terragrunt runs Terraform commands.\n\n* Returns the absolute path to the working directory.\n* Useful when you need to manage substitutions of vars inside a *.tfvars file located in terragrunt's tmp dir.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -826,6 +819,7 @@
 					"description": "Path to the file to mark as read"
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"string"
@@ -839,6 +833,7 @@
 			"name": "get_default_retryable_errors",
 			"description": "Returns the list of default retryable errors.\n\n* Returns a list of error patterns that Terragrunt will retry by default.\n* Useful for extending the default retry behavior.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -852,6 +847,7 @@
 			"name": "get_terragrunt_source_cli_flag",
 			"description": "Returns the value passed via --terragrunt-source flag or TERRAGRUNT_SOURCE environment variable.\n\n* Returns the source override value if specified.\n* Returns empty string if neither the flag nor environment variable is set.\n* Useful for constructing hooks or flags that only apply to local development.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -874,6 +870,7 @@
 					"description": "Name of the include block to base the relative path on (required if multiple include blocks exist)"
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"string"
@@ -896,6 +893,7 @@
 					"description": "The number to get the absolute value of"
 				}
 			],
+			"arity": { "params": ["num"], "variadic": false },
 			"returnType": {
 				"types": [
 					"number"
@@ -923,6 +921,7 @@
 					"description": "Relative path to convert to absolute"
 				}
 			],
+			"arity": { "params": ["path"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -958,6 +957,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["list"], "variadic": false },
 			"returnType": {
 				"types": [
 					"boolean"
@@ -990,6 +990,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["list"], "variadic": false },
 			"returnType": {
 				"types": [
 					"boolean"
@@ -1017,6 +1018,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1041,6 +1043,7 @@
 					"description": "String to encode in base64"
 				}
 			],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1071,6 +1074,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1095,6 +1099,7 @@
 					"description": "String to compress and encode"
 				}
 			],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1106,6 +1111,31 @@
 			},
 			"examples": [
 				"locals { compressed = base64gzip(\"Hello World\") }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "base64gzip_compat",
+			"description": "Compresses a string with gzip and base64-encodes the result exactly as `base64gzip` did in Terragrunt v1.1.3 and earlier.\n\n* Produces the same bytes as the older `base64gzip`, for configurations that compare or store its output.\n* Requires the `base64gzip-compat` experiment; without it every call fails.",
+			"parameters": [
+				{
+					"name": "str",
+					"types": [
+						"string"
+					],
+					"required": true,
+					"description": "String to compress"
+				}
+			],
+			"arity": { "params": ["str"], "variadic": false },
+			"returnType": {
+				"types": [
+					"string"
+				],
+				"description": "Base64-encoded gzip stream"
+			},
+			"examples": [
+				"locals { compressed = base64gzip_compat(file(\"policy.json\")) }"
 			],
 			"deprecated": false
 		},
@@ -1122,6 +1152,7 @@
 					"description": "String to hash"
 				}
 			],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1149,6 +1180,7 @@
 					"description": "String to hash"
 				}
 			],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1189,6 +1221,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["str"], "variadic": true },
 			"returnType": {
 				"types": [
 					"string"
@@ -1221,6 +1254,7 @@
 					"description": "Expression to test"
 				}
 			],
+			"arity": { "params": ["expression"], "variadic": false },
 			"returnType": {
 				"types": [
 					"boolean"
@@ -1245,6 +1279,7 @@
 					"description": "Number to round up"
 				}
 			],
+			"arity": { "params": ["num"], "variadic": false },
 			"returnType": {
 				"types": [
 					"number"
@@ -1269,6 +1304,7 @@
 					"description": "String to chomp"
 				}
 			],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1298,12 +1334,13 @@
 						"number"
 					],
 					"required": true,
-					"description": "Size of each chunk",
+					"description": "Size of each chunk, a whole number",
 					"validation": {
 						"min": 1
 					}
 				}
 			],
+			"arity": { "params": ["list", "size"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -1342,6 +1379,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["containing_prefix", "contained_ip_or_prefix"], "variadic": false },
 			"returnType": {
 				"types": [
 					"boolean"
@@ -1380,6 +1418,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["prefix", "hostnum"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1410,6 +1449,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["prefix"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1463,6 +1503,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["prefix", "newbits", "netnum"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1506,6 +1547,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["prefix"], "variadic": true },
 			"returnType": {
 				"types": [
 					"array"
@@ -1530,6 +1572,7 @@
 					"description": "List to compact"
 				}
 			],
+			"arity": { "params": ["list"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -1555,6 +1598,7 @@
 					"variadic": true
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"array"
@@ -1592,6 +1636,7 @@
 					"description": "Value to find"
 				}
 			],
+			"arity": { "params": ["list", "value"], "variadic": false },
 			"returnType": {
 				"types": [
 					"boolean"
@@ -1616,6 +1661,7 @@
 					"description": "CSV-formatted string to decode"
 				}
 			],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -1640,6 +1686,7 @@
 					"description": "List to deduplicate"
 				}
 			],
+			"arity": { "params": ["list"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -1669,12 +1716,13 @@
 						"number"
 					],
 					"required": true,
-					"description": "Index to retrieve",
+					"description": "Index to retrieve, a whole number",
 					"validation": {
 						"min": 0
 					}
 				}
 			],
+			"arity": { "params": ["list", "index"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string",
@@ -1712,6 +1760,7 @@
 					"description": "Suffix to look for"
 				}
 			],
+			"arity": { "params": ["str", "suffix"], "variadic": false },
 			"returnType": {
 				"types": [
 					"boolean"
@@ -1739,6 +1788,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["path"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1766,6 +1816,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["path"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1796,6 +1847,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["path"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1826,6 +1878,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["path"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1856,6 +1909,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["path"], "variadic": false },
 			"returnType": {
 				"types": [
 					"boolean"
@@ -1883,6 +1937,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["path"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1899,7 +1954,7 @@
 		},
 		{
 			"name": "fileset",
-			"description": "Enumerates files that match a glob pattern.\n\n* Returns a list of files that match the specified pattern.\n* Supports standard glob syntax.\n* Path is relative to the configuration file.",
+			"description": "Enumerates the files below a directory that match a glob pattern.\n\n* Returns the regular files whose path relative to the directory matches the pattern, relative to the directory and in lexical order; directories that symbolic links in it resolve to are searched too.\n* The pattern uses doublestar syntax: `*` and `?` within one path segment, `**` as a whole segment for any number of directories, `[...]` classes, `{a,b}` alternatives and `\\` escapes.\n* A relative directory resolves from the configuration file's directory, and no boundary applies.",
 			"parameters": [
 				{
 					"name": "path",
@@ -1918,9 +1973,10 @@
 						"string"
 					],
 					"required": true,
-					"description": "Glob pattern to match files"
+					"description": "Doublestar pattern matched against each file's path relative to the directory"
 				}
 			],
+			"arity": { "params": ["path", "pattern"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -1948,6 +2004,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["path"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -1978,6 +2035,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["path"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -2008,6 +2066,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["path"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -2035,6 +2094,7 @@
 					"description": "Nested list to flatten"
 				}
 			],
+			"arity": { "params": ["list"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -2059,6 +2119,7 @@
 					"description": "Number to round down"
 				}
 			],
+			"arity": { "params": ["num"], "variadic": false },
 			"returnType": {
 				"types": [
 					"number"
@@ -2100,6 +2161,7 @@
 					"description": "Values to format"
 				}
 			],
+			"arity": { "params": ["format"], "variadic": true },
 			"returnType": {
 				"types": [
 					"string"
@@ -2138,6 +2200,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["format", "time"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -2171,9 +2234,10 @@
 					],
 					"required": false,
 					"variadic": true,
-					"description": "Lists of values to format"
+					"description": "Values to format. A list gives one of its elements to each string, and every list must be as long as the others; any other value is used in every string"
 				}
 			],
+			"arity": { "params": ["format"], "variadic": true },
 			"returnType": {
 				"types": [
 					"array"
@@ -2210,6 +2274,7 @@
 					"description": "String to indent"
 				}
 			],
+			"arity": { "params": ["spaces", "str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -2247,6 +2312,7 @@
 					"description": "Value to find"
 				}
 			],
+			"arity": { "params": ["list", "value"], "variadic": false },
 			"returnType": {
 				"types": [
 					"number"
@@ -2288,6 +2354,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["num", "base"], "variadic": false },
 			"returnType": {
 				"types": [
 					"number"
@@ -2333,6 +2400,7 @@
 					"description": "Default value if key not found"
 				}
 			],
+			"arity": { "params": ["inputMap", "key"], "variadic": true },
 			"returnType": {
 				"types": [
 					"string",
@@ -2362,6 +2430,7 @@
 					"description": "String to convert to lowercase"
 				}
 			],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -2402,6 +2471,7 @@
 					"description": "Values to search for"
 				}
 			],
+			"arity": { "params": ["values", "keys", "searchset"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -2427,6 +2497,7 @@
 					"variadic": true
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"number"
@@ -2452,6 +2523,7 @@
 					"variadic": true
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"number"
@@ -2476,6 +2548,7 @@
 					"description": "List of values"
 				}
 			],
+			"arity": { "params": ["list"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string",
@@ -2509,15 +2582,15 @@
 					"types": [
 						"number"
 					],
-					"required": false,
-					"description": "Base to parse in (default 10)",
-					"defaultValue": 10,
+					"required": true,
+					"description": "Base to parse in",
 					"validation": {
 						"min": 2,
 						"max": 62
 					}
 				}
 			],
+			"arity": { "params": ["number", "base"], "variadic": false },
 			"returnType": {
 				"types": [
 					"number"
@@ -2550,6 +2623,7 @@
 					"description": "Power to raise to"
 				}
 			],
+			"arity": { "params": ["num", "power"], "variadic": false },
 			"returnType": {
 				"types": [
 					"number"
@@ -2563,7 +2637,7 @@
 		},
 		{
 			"name": "range",
-			"description": "Generates a list of numbers from start to end (inclusive).\n\n* Creates a sequence of numbers with optional step value.\n* Can count up or down based on start and end values.",
+			"description": "Generates a list of numbers from a start up to, but not including, a limit.\n\n* `range(limit)` counts from 0, `range(start, limit)` from start, both by 1 or by -1 when the limit is below the start.\n* `range(start, limit, step)` counts by step, which must move towards the limit.\n* Generates at most 1024 numbers.",
 			"parameters": [
 				{
 					"name": "start",
@@ -2571,15 +2645,15 @@
 						"number"
 					],
 					"required": true,
-					"description": "First number in range"
+					"description": "First number in the range; when it is the only argument, the limit, and the range starts at 0"
 				},
 				{
-					"name": "end",
+					"name": "limit",
 					"types": [
 						"number"
 					],
-					"required": true,
-					"description": "Last number in range"
+					"required": false,
+					"description": "Number the range stops before"
 				},
 				{
 					"name": "step",
@@ -2587,13 +2661,10 @@
 						"number"
 					],
 					"required": false,
-					"description": "Increment between numbers",
-					"defaultValue": 1,
-					"validation": {
-						"min": 0.000001
-					}
+					"description": "Increment between numbers: 1, or -1 when the limit is below the start, unless given"
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"array"
@@ -2629,6 +2700,7 @@
 					"description": "String to search"
 				}
 			],
+			"arity": { "params": ["pattern", "string"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -2664,6 +2736,7 @@
 					"description": "String to search"
 				}
 			],
+			"arity": { "params": ["pattern", "string"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -2704,6 +2777,7 @@
 					"description": "String to replace with"
 				}
 			],
+			"arity": { "params": ["str", "substr", "replace"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -2728,6 +2802,7 @@
 					"description": "List to reverse"
 				}
 			],
+			"arity": { "params": ["list"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -2766,6 +2841,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["ciphertext", "privatekey"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -2791,6 +2867,7 @@
 					"variadic": true
 				}
 			],
+			"arity": { "params": ["first_set"], "variadic": true },
 			"returnType": {
 				"types": [
 					"array"
@@ -2824,6 +2901,7 @@
 					"variadic": true
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"array"
@@ -2856,6 +2934,7 @@
 					"description": "Set to subtract"
 				}
 			],
+			"arity": { "params": ["a", "b"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -2881,6 +2960,7 @@
 					"variadic": true
 				}
 			],
+			"arity": { "params": ["first_set"], "variadic": true },
 			"returnType": {
 				"types": [
 					"array"
@@ -2910,7 +2990,7 @@
 						"number"
 					],
 					"required": true,
-					"description": "Starting index"
+					"description": "Starting index, a whole number"
 				},
 				{
 					"name": "end_index",
@@ -2918,9 +2998,10 @@
 						"number"
 					],
 					"required": true,
-					"description": "Ending index (exclusive)"
+					"description": "Ending index (exclusive), a whole number"
 				}
 			],
+			"arity": { "params": ["list", "start_index", "end_index"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -2950,6 +3031,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["list"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -2982,6 +3064,7 @@
 					"description": "String to split"
 				}
 			],
+			"arity": { "params": ["separator", "str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -3014,6 +3097,7 @@
 					"description": "Substring to search for"
 				}
 			],
+			"arity": { "params": ["str", "substr"], "variadic": false },
 			"returnType": {
 				"types": [
 					"boolean"
@@ -3038,6 +3122,7 @@
 					"description": "String to reverse"
 				}
 			],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3051,7 +3136,7 @@
 		},
 		{
 			"name": "substr",
-			"description": "Extracts a substring from a string.\n\n* Returns part of a string based on offset and length.\n* If length is not specified, returns rest of string from offset.\n* Offset can be negative to count from end of string.",
+			"description": "Extracts a substring from a string.\n\n* Returns part of a string based on offset and length.\n* A negative length returns the rest of the string from offset.\n* Offset can be negative to count from end of string.",
 			"parameters": [
 				{
 					"name": "string",
@@ -3074,13 +3159,11 @@
 					"types": [
 						"number"
 					],
-					"required": false,
-					"description": "Length of substring to extract",
-					"validation": {
-						"min": 0
-					}
+					"required": true,
+					"description": "Length of substring to extract; a negative length takes the rest of the string"
 				}
 			],
+			"arity": { "params": ["str", "offset", "length"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3119,6 +3202,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["v"], "variadic": false },
 			"returnType": {
 				"types": [
 					"boolean"
@@ -3147,6 +3231,7 @@
 					"description": "Value to convert"
 				}
 			],
+			"arity": { "params": ["v"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -3172,6 +3257,7 @@
 					"description": "Value to convert"
 				}
 			],
+			"arity": { "params": ["v"], "variadic": false },
 			"returnType": {
 				"types": [
 					"object"
@@ -3200,6 +3286,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["v"], "variadic": false },
 			"returnType": {
 				"types": [
 					"number"
@@ -3224,6 +3311,7 @@
 					"description": "Value to convert"
 				}
 			],
+			"arity": { "params": ["v"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -3250,6 +3338,7 @@
 					"description": "Value to convert"
 				}
 			],
+			"arity": { "params": ["v"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3263,7 +3352,7 @@
 		},
 		{
 			"name": "textdecodebase64",
-			"description": "Decodes a Base64-encoded string into UTF-8 text.\n\n* Decodes base64 string into UTF-8 text.\n* Returns error if input is not valid base64 or UTF-8.\n* Useful for decoding stored credentials or certificates.",
+			"description": "Decodes a Base64-encoded string into text in the given character encoding.\n\n* Decodes the bytes as UTF-8 or UTF-16.\n* Returns error if input is not valid base64 or the encoding is not supported.\n* Useful for decoding stored credentials or certificates.",
 			"parameters": [
 				{
 					"name": "str",
@@ -3279,10 +3368,11 @@
 				{
 					"name": "encoding",
 					"types": ["string"],
-					"required": false,
-					"description": "Character encoding; UTF-8 is the supported encoding."
+					"required": true,
+					"description": "Character encoding of the decoded bytes: UTF-8 or UTF-16"
 				}
 			],
+			"arity": { "params": ["source", "encoding"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3290,13 +3380,13 @@
 				"description": "Decoded UTF-8 text"
 			},
 			"examples": [
-				"locals { text = textdecodebase64(var.encoded_data) }"
+				"locals { text = textdecodebase64(var.encoded_data, \"UTF-16\") }"
 			],
 			"deprecated": false
 		},
 		{
 			"name": "textencodebase64",
-			"description": "Encodes UTF-8 text as a Base64 string.\n\n* Encodes UTF-8 text into base64 string.\n* Useful for storing text in formats that require base64.\n* Returns error if input is not valid UTF-8.",
+			"description": "Encodes text in the given character encoding as a Base64 string.\n\n* Encodes the text as UTF-8 or UTF-16 bytes, then as base64.\n* Useful for storing text in formats that require base64.\n* Returns error if the encoding is not supported.",
 			"parameters": [
 				{
 					"name": "str",
@@ -3304,15 +3394,16 @@
 						"string"
 					],
 					"required": true,
-					"description": "UTF-8 text to encode"
+					"description": "Text to encode"
 				},
 				{
 					"name": "encoding",
 					"types": ["string"],
-					"required": false,
-					"description": "Character encoding; UTF-8 is the supported encoding."
+					"required": true,
+					"description": "Character encoding of the encoded bytes: UTF-8 or UTF-16"
 				}
 			],
+			"arity": { "params": ["string", "encoding"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3323,7 +3414,7 @@
 				}
 			},
 			"examples": [
-				"locals { encoded = textencodebase64(\"Hello, World!\") }"
+				"locals { encoded = textencodebase64(\"Hello, World!\", \"UTF-16\") }"
 			],
 			"deprecated": false
 		},
@@ -3354,6 +3445,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["timestamp", "duration"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3395,6 +3487,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["timestamp_a", "timestamp_b"], "variadic": false },
 			"returnType": {
 				"types": [
 					"number"
@@ -3417,6 +3510,7 @@
 			"name": "timestamp",
 			"description": "Returns the current timestamp.\n\n* Returns current time in RFC 3339 format.\n* Time is in UTC.\n* Precision is to seconds.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3433,7 +3527,7 @@
 		},
 		{
 			"name": "trim",
-			"description": "Removes specified characters from start and end of string.\n\n* Removes all instances of specified characters from both ends.\n* If no characters specified, removes whitespace.\n* Case-sensitive matching.",
+			"description": "Removes specified characters from start and end of string.\n\n* Removes all instances of specified characters from both ends.\n* Case-sensitive matching.",
 			"parameters": [
 				{
 					"name": "string",
@@ -3448,11 +3542,11 @@
 					"types": [
 						"string"
 					],
-					"required": false,
-					"description": "Characters to trim (defaults to whitespace)",
-					"defaultValue": " \t\n\r"
+					"required": true,
+					"description": "Characters to trim, each taken separately"
 				}
 			],
+			"arity": { "params": ["str", "cutset"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3460,7 +3554,7 @@
 				"description": "Trimmed string"
 			},
 			"examples": [
-				"locals { cleaned = trim(\"  Hello!  \") }"
+				"locals { cleaned = trim(\"?!Hello!?\", \"!?\") }"
 			],
 			"deprecated": false
 		},
@@ -3485,6 +3579,7 @@
 					"description": "Prefix to remove"
 				}
 			],
+			"arity": { "params": ["str", "prefix"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3509,6 +3604,7 @@
 					"description": "String to trim"
 				}
 			],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3541,6 +3637,7 @@
 					"description": "Suffix to remove"
 				}
 			],
+			"arity": { "params": ["str", "suffix"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3570,6 +3667,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["values"], "variadic": false },
 			"returnType": {
 				"types": [
 					"object"
@@ -3583,7 +3681,7 @@
 		},
 		{
 			"name": "try",
-			"description": "Attempts to evaluate an expression and returns a default value if it fails.\n\n* Returns the expression's value if evaluation succeeds.\n* Returns the default value if evaluation fails.\n* Useful for handling potential errors gracefully.",
+			"description": "Evaluates each expression in turn and returns the first that succeeds.\n\n* Returns the expression's value if evaluation succeeds.\n* Otherwise tries each fallback in order, and fails if none succeeds.\n* Useful for handling potential errors gracefully.",
 			"parameters": [
 				{
 					"name": "expression",
@@ -3599,7 +3697,7 @@
 					"description": "Expression to try evaluating"
 				},
 				{
-					"name": "default",
+					"name": "fallbacks",
 					"types": [
 						"string",
 						"number",
@@ -3608,10 +3706,12 @@
 						"object",
 						"null"
 					],
-					"required": true,
-					"description": "Value to return if evaluation fails"
+					"required": false,
+					"variadic": true,
+					"description": "Expressions to try in order if evaluation fails"
 				}
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": {
 				"types": [
 					"string",
@@ -3621,49 +3721,10 @@
 					"object",
 					"null"
 				],
-				"description": "Result of expression or default value"
+				"description": "Result of the first expression that succeeds"
 			},
 			"examples": [
 				"locals { value = try(var.map[\"key\"], \"default\") }"
-			],
-			"deprecated": false
-		},
-		{
-			"name": "type",
-			"description": "Returns the type of a value.\n\n* Returns a string describing the type.\n* Useful for conditional logic based on value types.\n* Possible return values include: string, number, bool, list, map, null.",
-			"parameters": [
-				{
-					"name": "value",
-					"types": [
-						"string",
-						"number",
-						"boolean",
-						"array",
-						"object",
-						"null"
-					],
-					"required": true,
-					"description": "Value to check type of"
-				}
-			],
-			"returnType": {
-				"types": [
-					"string"
-				],
-				"description": "Type of the value",
-				"validation": {
-					"allowedValues": [
-						"string",
-						"number",
-						"bool",
-						"list",
-						"map",
-						"null"
-					]
-				}
-			},
-			"examples": [
-				"locals { value_type = type(var.input) }"
 			],
 			"deprecated": false
 		},
@@ -3680,6 +3741,7 @@
 					"description": "String to convert to uppercase"
 				}
 			],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3704,6 +3766,7 @@
 					"description": "String to URL-encode"
 				}
 			],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3734,6 +3797,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3749,6 +3813,7 @@
 			"name": "uuid",
 			"description": "Generates a random UUID.\n\n* Generates a random UUID v4.\n* Returns a new UUID each time it's called.\n* Useful for creating unique identifiers.",
 			"parameters": [],
+			"arity": { "params": [], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3787,6 +3852,7 @@
 					"description": "Name to generate UUID from"
 				}
 			],
+			"arity": { "params": ["namespace", "name"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3814,6 +3880,7 @@
 					"description": "Map to extract values from"
 				}
 			],
+			"arity": { "params": ["mapping"], "variadic": false },
 			"returnType": {
 				"types": [
 					"array"
@@ -3851,6 +3918,7 @@
 					"description": "List of values"
 				}
 			],
+			"arity": { "params": ["keys", "values"], "variadic": false },
 			"returnType": {
 				"types": [
 					"object"
@@ -3878,6 +3946,7 @@
 					}
 				}
 			],
+			"arity": { "params": ["path"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -3913,6 +3982,7 @@
 					"description": "Prefix to look for"
 				}
 			],
+			"arity": { "params": ["str", "prefix"], "variadic": false },
 			"returnType": {
 				"types": [
 					"boolean"
@@ -3921,24 +3991,6 @@
 			},
 			"examples": [
 				"locals { has_prefix = startswith(\"terraform-\", \"terraform\") }"
-			],
-			"deprecated": false
-		},
-		{
-			"name": "plantimestamp",
-			"description": "Returns a UTC timestamp for use in plan-time references.\n\n* Returns timestamp string that remains consistent during plan.\n* Useful for avoiding unnecessary resource updates.\n* Format is RFC 3339.",
-			"parameters": [],
-			"returnType": {
-				"types": [
-					"string"
-				],
-				"description": "Plan-time timestamp string",
-				"validation": {
-					"pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
-				}
-			},
-			"examples": [
-				"locals { plan_time = plantimestamp() }"
 			],
 			"deprecated": false
 		},
@@ -3960,6 +4012,7 @@
 					"description": "Value to mark as sensitive"
 				}
 			],
+			"arity": { "params": ["value"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string",
@@ -3994,6 +4047,7 @@
 					"description": "Sensitive value to unwrap"
 				}
 			],
+			"arity": { "params": ["value"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string",
@@ -4028,6 +4082,7 @@
 					"description": "Value to check for sensitive marking"
 				}
 			],
+			"arity": { "params": ["value"], "variadic": false },
 			"returnType": {
 				"types": [
 					"boolean"
@@ -4038,6 +4093,542 @@
 				"locals { is_secret = issensitive(var.value) }"
 			],
 			"deprecated": false
+		},
+		{
+			"name": "ephemeralasnull",
+			"description": "Returns a value with each ephemeral part replaced by null.\n\n* Terragrunt has no ephemeral values, so the value is returned unchanged, sensitive or not.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
+					"required": true,
+					"description": "Value whose ephemeral parts become null"
+				}
+			],
+			"arity": { "params": ["value"], "variadic": false },
+			"returnType": {
+				"types": [
+					"string",
+					"number",
+					"boolean",
+					"array",
+					"object",
+					"null"
+				],
+				"description": "The value, with no ephemeral part"
+			},
+			"examples": [
+				"locals { token = ephemeralasnull(local.session_token) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumeequal",
+			"description": "Asserts that a value equals the value assumed for it, and returns the assumed value.\n\n* Converts the actual value to the assumed value's type first, and fails when it cannot or when the two differ.\n* The result is the assumed value: whether the actual value was sensitive does not carry over.",
+			"parameters": [
+				{
+					"name": "actual_value",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
+					"required": true,
+					"description": "Value to make the assumption about"
+				},
+				{
+					"name": "expected_value",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
+					"required": true,
+					"description": "Value the first argument is assumed to equal"
+				}
+			],
+			"arity": { "params": ["actual_value", "expected_value"], "variadic": false },
+			"returnType": {
+				"types": [
+					"string",
+					"number",
+					"boolean",
+					"array",
+					"object",
+					"null"
+				],
+				"description": "The assumed value"
+			},
+			"examples": [
+				"locals { region = assumeequal(local.config.region, \"eu-west-1\") }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumenotnull",
+			"description": "Asserts that a value is not null, and returns it.\n\n* Fails on a null value. The `null` keyword has no type, so it fails for that reason: give it one by converting it first.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object"
+					],
+					"required": true,
+					"description": "Value assumed not to be null"
+				}
+			],
+			"arity": { "params": ["value"], "variadic": false },
+			"returnType": {
+				"types": [
+					"string",
+					"number",
+					"boolean",
+					"array",
+					"object"
+				],
+				"description": "The value"
+			},
+			"examples": [
+				"locals { account = assumenotnull(local.accounts[\"prod\"]) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumestringprefix",
+			"description": "Asserts that a string begins with a prefix, and returns the string.\n\n* Compares with the prefix less its last character, unless that character is a delimiter such as `/`, `:` or `-`, because a later character could combine with it.\n* A string shorter than the prefix passes when it begins the prefix, and a null string passes.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"string",
+						"null"
+					],
+					"required": true,
+					"description": "String to make the assumption about"
+				},
+				{
+					"name": "prefix",
+					"types": [
+						"string"
+					],
+					"required": true,
+					"description": "Prefix the string is assumed to have"
+				}
+			],
+			"arity": { "params": ["value", "prefix"], "variadic": false },
+			"returnType": {
+				"types": [
+					"string",
+					"null"
+				],
+				"description": "The string"
+			},
+			"examples": [
+				"locals { role = assumestringprefix(local.role_arn, \"arn:aws:iam::\") }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumelistlength",
+			"description": "Asserts that a list's length lies between two bounds, inclusive, and returns the list.\n\n* Converts the value to a list first, so its elements take one type.\n* The bounds must be whole numbers. A negative minimum is no bound; a negative maximum is never met.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"array"
+					],
+					"required": true,
+					"description": "List to make the assumption about"
+				},
+				{
+					"name": "min_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The minimum possible list length"
+				},
+				{
+					"name": "max_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The maximum possible list length"
+				}
+			],
+			"arity": { "params": ["value", "min_length", "max_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"array"
+				],
+				"description": "The list"
+			},
+			"examples": [
+				"locals { azs = assumelistlength(local.availability_zones, 2, 3) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumelistlengthmin",
+			"description": "Asserts that a list has at least a given number of elements, and returns the list.\n\n* Converts the value to a list first, so its elements take one type.\n* The bound must be a whole number. A negative one is no bound.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"array"
+					],
+					"required": true,
+					"description": "List to make the assumption about"
+				},
+				{
+					"name": "min_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The minimum possible list length"
+				}
+			],
+			"arity": { "params": ["value", "min_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"array"
+				],
+				"description": "The list"
+			},
+			"examples": [
+				"locals { subnets = assumelistlengthmin(local.subnet_ids, 1) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumelistlengthmax",
+			"description": "Asserts that a list has at most a given number of elements, and returns the list.\n\n* Converts the value to a list first, so its elements take one type.\n* The bound must be a whole number. A negative one is never met.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"array"
+					],
+					"required": true,
+					"description": "List to make the assumption about"
+				},
+				{
+					"name": "max_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The maximum possible list length"
+				}
+			],
+			"arity": { "params": ["value", "max_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"array"
+				],
+				"description": "The list"
+			},
+			"examples": [
+				"locals { nameservers = assumelistlengthmax(local.dns_servers, 4) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumesetlength",
+			"description": "Asserts that a set's length lies between two bounds, inclusive, and returns the set.\n\n* Converts the value to a set first, so an element written twice counts once.\n* The bounds must be whole numbers. A negative minimum is no bound; a negative maximum is never met.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"array"
+					],
+					"required": true,
+					"description": "Set to make the assumption about"
+				},
+				{
+					"name": "min_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The minimum possible set length"
+				},
+				{
+					"name": "max_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The maximum possible set length"
+				}
+			],
+			"arity": { "params": ["value", "min_length", "max_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"array"
+				],
+				"description": "The set"
+			},
+			"examples": [
+				"locals { regions = assumesetlength(toset(local.regions), 1, 3) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumesetlengthmin",
+			"description": "Asserts that a set has at least a given number of elements, and returns the set.\n\n* Converts the value to a set first, so an element written twice counts once.\n* The bound must be a whole number. A negative one is no bound.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"array"
+					],
+					"required": true,
+					"description": "Set to make the assumption about"
+				},
+				{
+					"name": "min_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The minimum possible set length"
+				}
+			],
+			"arity": { "params": ["value", "min_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"array"
+				],
+				"description": "The set"
+			},
+			"examples": [
+				"locals { owners = assumesetlengthmin(toset(local.owners), 1) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumesetlengthmax",
+			"description": "Asserts that a set has at most a given number of elements, and returns the set.\n\n* Converts the value to a set first, so an element written twice counts once.\n* The bound must be a whole number. A negative one is never met.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"array"
+					],
+					"required": true,
+					"description": "Set to make the assumption about"
+				},
+				{
+					"name": "max_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The maximum possible set length"
+				}
+			],
+			"arity": { "params": ["value", "max_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"array"
+				],
+				"description": "The set"
+			},
+			"examples": [
+				"locals { tags = assumesetlengthmax(toset(local.tag_keys), 50) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumemaplength",
+			"description": "Asserts that a map's number of elements lies between two bounds, inclusive, and returns the map.\n\n* Converts the value to a map first, so its values take one type.\n* The bounds must be whole numbers. A negative minimum is no bound; a negative maximum is never met.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"object"
+					],
+					"required": true,
+					"description": "Map to make the assumption about"
+				},
+				{
+					"name": "min_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The minimum possible map length"
+				},
+				{
+					"name": "max_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The maximum possible map length"
+				}
+			],
+			"arity": { "params": ["value", "min_length", "max_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"object"
+				],
+				"description": "The map"
+			},
+			"examples": [
+				"locals { tags = assumemaplength(local.tags, 1, 50) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumemaplengthmin",
+			"description": "Asserts that a map has at least a given number of elements, and returns the map.\n\n* Converts the value to a map first, so its values take one type.\n* The bound must be a whole number. A negative one is no bound.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"object"
+					],
+					"required": true,
+					"description": "Map to make the assumption about"
+				},
+				{
+					"name": "min_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The minimum possible map length"
+				}
+			],
+			"arity": { "params": ["value", "min_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"object"
+				],
+				"description": "The map"
+			},
+			"examples": [
+				"locals { accounts = assumemaplengthmin(local.accounts, 1) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "assumemaplengthmax",
+			"description": "Asserts that a map has at most a given number of elements, and returns the map.\n\n* Converts the value to a map first, so its values take one type.\n* The bound must be a whole number. A negative one is never met.",
+			"parameters": [
+				{
+					"name": "value",
+					"types": [
+						"object"
+					],
+					"required": true,
+					"description": "Map to make the assumption about"
+				},
+				{
+					"name": "max_length",
+					"types": [
+						"number"
+					],
+					"required": true,
+					"description": "The maximum possible map length"
+				}
+			],
+			"arity": { "params": ["value", "max_length"], "variadic": false },
+			"returnType": {
+				"types": [
+					"object"
+				],
+				"description": "The map"
+			},
+			"examples": [
+				"locals { labels = assumemaplengthmax(local.labels, 64) }"
+			],
+			"deprecated": false
+		},
+		{
+			"name": "list",
+			"description": "Removed in Terraform v0.12: every call fails.\n\n* Write a list with `tolist([ ... ])` instead.",
+			"parameters": [
+				{
+					"name": "vals",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
+					"required": false,
+					"description": "Elements of the list",
+					"variadic": true
+				}
+			],
+			"arity": { "params": [], "variadic": true },
+			"returnType": {
+				"types": [
+					"array"
+				],
+				"description": "Never returns"
+			},
+			"examples": [
+				"locals { zones = tolist([\"a\", \"b\"]) }"
+			],
+			"deprecated": true,
+			"deprecationMessage": "The list function is not available in OpenTofu; use tolist([ ... ]) syntax to write a literal list."
+		},
+		{
+			"name": "map",
+			"description": "Removed in Terraform v0.12: every call fails.\n\n* Write a map with `tomap({ ... })` instead.",
+			"parameters": [
+				{
+					"name": "vals",
+					"types": [
+						"string",
+						"number",
+						"boolean",
+						"array",
+						"object",
+						"null"
+					],
+					"required": false,
+					"description": "Alternating keys and values of the map",
+					"variadic": true
+				}
+			],
+			"arity": { "params": [], "variadic": true },
+			"returnType": {
+				"types": [
+					"object"
+				],
+				"description": "Never returns"
+			},
+			"examples": [
+				"locals { tags = tomap({ team = \"platform\" }) }"
+			],
+			"deprecated": true,
+			"deprecationMessage": "The map function is not available in OpenTofu; use tomap({ ... }) syntax to write a literal map."
 		},
 		{
 			"name": "templatefile",
@@ -4063,6 +4654,7 @@
 					"description": "Map of variables to use in template"
 				}
 			],
+			"arity": { "params": ["path", "vars"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -4098,6 +4690,7 @@
 					"description": "Map of variables to use in template"
 				}
 			],
+			"arity": { "params": ["data", "vars"], "variadic": false },
 			"returnType": {
 				"types": [
 					"string"
@@ -4113,86 +4706,103 @@
 			"name": "coalescelist",
 			"description": "Returns the first non-empty list from its arguments.",
 			"parameters": [{ "name": "lists", "types": ["array"], "required": true, "variadic": true }],
+			"arity": { "params": [], "variadic": true },
 			"returnType": { "types": ["array"], "description": "The first non-empty list." }
 		},
 		{
 			"name": "join",
-			"description": "Joins a list of strings using a separator.",
+			"description": "Joins the strings of one or more lists using a separator.",
 			"parameters": [
 				{ "name": "separator", "types": ["string"], "required": true },
-				{ "name": "values", "types": ["array"], "required": true }
+				{ "name": "lists", "types": ["array"], "required": true, "variadic": true }
 			],
+			"arity": { "params": ["separator"], "variadic": true },
 			"returnType": { "types": ["string"], "description": "The joined string." }
 		},
 		{
 			"name": "keys",
 			"description": "Returns the keys of a map in lexicographical order.",
 			"parameters": [{ "name": "map", "types": ["object"], "required": true }],
+			"arity": { "params": ["inputMap"], "variadic": false },
 			"returnType": { "types": ["array"], "description": "The sorted map keys." }
 		},
 		{
 			"name": "length",
 			"description": "Returns the number of elements in a collection or characters in a string.",
 			"parameters": [{ "name": "value", "types": ["string", "array", "object"], "required": true }],
+			"arity": { "params": ["value"], "variadic": false },
 			"returnType": { "types": ["number"], "description": "The value length." }
 		},
 		{
 			"name": "md5",
 			"description": "Computes the MD5 hash of a string and returns its hexadecimal digest.",
 			"parameters": [{ "name": "value", "types": ["string"], "required": true }],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": { "types": ["string"], "description": "The hexadecimal MD5 digest." }
 		},
 		{
 			"name": "sha1",
 			"description": "Computes the SHA-1 hash of a string and returns its hexadecimal digest.",
 			"parameters": [{ "name": "value", "types": ["string"], "required": true }],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": { "types": ["string"], "description": "The hexadecimal SHA-1 digest." }
 		},
 		{
 			"name": "sha256",
 			"description": "Computes the SHA-256 hash of a string and returns its hexadecimal digest.",
 			"parameters": [{ "name": "value", "types": ["string"], "required": true }],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": { "types": ["string"], "description": "The hexadecimal SHA-256 digest." }
 		},
 		{
 			"name": "sha512",
 			"description": "Computes the SHA-512 hash of a string and returns its hexadecimal digest.",
 			"parameters": [{ "name": "value", "types": ["string"], "required": true }],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": { "types": ["string"], "description": "The hexadecimal SHA-512 digest." }
 		},
 		{
 			"name": "signum",
 			"description": "Returns -1, 0, or 1 to indicate the sign of a number.",
 			"parameters": [{ "name": "value", "types": ["number"], "required": true }],
+			"arity": { "params": ["num"], "variadic": false },
 			"returnType": { "types": ["number"], "description": "The sign of the number." }
 		},
 		{
 			"name": "sum",
 			"description": "Returns the sum of the numbers in a list.",
 			"parameters": [{ "name": "values", "types": ["array"], "required": true }],
+			"arity": { "params": ["list"], "variadic": false },
 			"returnType": { "types": ["number"], "description": "The numeric sum." }
 		},
 		{
 			"name": "title",
 			"description": "Converts the first letter of each word in a string to uppercase.",
 			"parameters": [{ "name": "value", "types": ["string"], "required": true }],
+			"arity": { "params": ["str"], "variadic": false },
 			"returnType": { "types": ["string"], "description": "The title-cased string." }
 		},
 		{
 			"name": "deep_merge",
 			"description": "Recursively merges maps and objects, with later arguments taking precedence.",
 			"parameters": [{ "name": "values", "types": ["object"], "required": false, "variadic": true }],
+			"arity": { "params": [], "variadic": true },
 			"returnType": { "types": ["object"], "description": "The recursively merged object." }
 		},
 		{
 			"name": "mark_glob_as_read",
-			"description": "Expands a gobwas-compatible glob and marks every matching file as read. Relative patterns resolve from the current working directory. Expansion is confined to the enclosing Git repository unless a leading --terragrunt-boundary argument explicitly changes the boundary.",
+			"description": "Expands a gobwas-compatible glob and marks every matching file as read. Relative patterns resolve from the current working directory. Expansion is confined to the enclosing Git repository unless a leading --terragrunt-boundary argument explicitly changes the boundary, given inline (\"--terragrunt-boundary=<directory>\", pattern) or as the next argument (\"--terragrunt-boundary\", directory, pattern); a relative boundary resolves from the current working directory. The walk starts at the pattern's longest leading directory before its first `*`, `?`, `[`, `{` or `\\`, or at the path itself when it has none, and is refused when that directory is not within the boundary, symbolic links resolved. Matches come in the order the walk meets them.",
 			"parameters": [
-				{ "name": "boundary_or_pattern", "types": ["string"], "required": true },
-				{ "name": "pattern", "types": ["string"], "required": false }
+				{ "name": "boundary_or_pattern", "types": ["string"], "required": true, "description": "The pattern, or the boundary: --terragrunt-boundary=<directory>, or --terragrunt-boundary followed by the directory" },
+				{ "name": "directory_or_pattern", "types": ["string"], "required": false, "description": "The pattern after --terragrunt-boundary=<directory>, or the boundary directory after --terragrunt-boundary" },
+				{ "name": "pattern", "types": ["string"], "required": false, "description": "The pattern after --terragrunt-boundary and its directory" }
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": { "types": ["array"], "description": "Absolute paths matched by the glob." },
-			"examples": ["locals {\n  configs = mark_glob_as_read(\"${get_terragrunt_dir()}/config/{*.yaml,**/*.yaml}\")\n}"],
+			"examples": [
+				"locals {\n  configs = mark_glob_as_read(\"${get_terragrunt_dir()}/config/{*.yaml,**/*.yaml}\")\n}",
+				"locals {\n  shared = mark_glob_as_read(\"--terragrunt-boundary\", \"/\", \"${get_terragrunt_dir()}/../../shared/*.yaml\")\n}"
+			],
 			"deprecated": false
 		},
 		{
@@ -4202,6 +4812,7 @@
 				{ "name": "version", "types": ["string"], "required": true },
 				{ "name": "constraint", "types": ["string"], "required": true }
 			],
+			"arity": { "params": [], "variadic": true },
 			"returnType": { "types": ["boolean"], "description": "True when the version satisfies the constraint." }
 		}
 	]
