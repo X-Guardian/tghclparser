@@ -2437,24 +2437,37 @@ async function validateFile(
 
 /**
  * Maps items through an async function with at most `limit` calls in flight.
+ * Once a call fails, no more are started, and the calls already running finish before the failure is thrown.
  *
  * @param items the items to map.
  * @param limit the most calls running at once.
  * @param fn the function applied to each item.
  * @param onResult called with each result and its index as soon as it is ready, in the order calls finish.
  * @returns the results, in the order of `items`.
+ * @throws the error of the failed call with the lowest index.
  */
 export async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>, onResult?: (result: R, index: number) => void): Promise<R[]> {
 	const results = Array.from<R>({ length: items.length });
 	let next = 0;
+	let failedAt = Number.POSITIVE_INFINITY;
+	let failure: unknown;
 	const worker = async (): Promise<void> => {
-		while (next < items.length) {
+		while (failedAt === Number.POSITIVE_INFINITY && next < items.length) {
 			const index = next++;
-			results[index] = await fn(items[index]);
+			try {
+				results[index] = await fn(items[index]);
+			} catch (error) {
+				if (index < failedAt) {
+					failedAt = index;
+					failure = error;
+				}
+				return;
+			}
 			onResult?.(results[index], index);
 		}
 	};
 	await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+	if (failedAt !== Number.POSITIVE_INFINITY) throw failure;
 	return results;
 }
 

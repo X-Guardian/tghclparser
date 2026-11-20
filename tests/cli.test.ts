@@ -1555,6 +1555,61 @@ describe('mapLimited', function () {
 		}, (result, index) => seen.push([result, index]));
 		expect(seen).to.deep.equal([[0, 1], [10, 2], [30, 0]]);
 	});
+
+	it('starts nothing more once a call fails, and finishes the calls already running', async () => {
+		const started: number[] = [];
+		const seen: number[] = [];
+		const items = [0, 1, 2, 3, 4, 5, 6, 7];
+		const run = mapLimited(items, 3, async item => {
+			started.push(item);
+			await new Promise(resolve => setTimeout(resolve, item === 2 ? 5 : 20));
+			if (item === 2) throw new Error('item 2');
+			return item;
+		}, result => seen.push(result));
+		let error: unknown;
+		try { await run; } catch (caught) { error = caught; }
+		expect((error as Error).message).to.equal('item 2');
+		expect(started).to.deep.equal([0, 1, 2]);
+		expect(seen.sort()).to.deep.equal([0, 1]);
+	});
+
+	it('throws the failure of the lowest index when several calls fail', async () => {
+		let error: unknown;
+		try {
+			await mapLimited([0, 1, 2], 3, async item => {
+				await new Promise(resolve => setTimeout(resolve, 20 - item * 5));
+				throw new Error(`item ${item}`);
+			});
+		} catch (caught) { error = caught; }
+		expect((error as Error).message).to.equal('item 0');
+	});
+});
+
+describe('CLI hcl validate output order', function () {
+	this.timeout(20000);
+
+	it('prints the findings of the files before an unreadable one, then its error, and nothing after', async function () {
+		if (process.getuid?.() === 0) this.skip();
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tghclp-order-'));
+		for (const unit of ['a', 'b', 'c']) {
+			await fs.mkdir(path.join(root, unit));
+			await fs.writeFile(path.join(root, unit, 'terragrunt.hcl'), `inputs = {\n  name = local.${unit}\n}\n`);
+		}
+		const unreadable = path.join(root, 'b', 'terragrunt.hcl');
+		await fs.chmod(unreadable, 0o000);
+
+		const cli = path.resolve('dist/cli.cjs');
+		const result = spawnSync(process.execPath, [cli, 'hcl', 'validate', '--working-dir', root], {encoding: 'utf8'});
+		await fs.chmod(unreadable, 0o644);
+		await fs.rm(root, {recursive: true, force: true});
+
+		const lines = result.stderr.trim().split('\n');
+		expect(result.status, result.stderr).to.equal(1);
+		expect(lines).to.have.length(2);
+		expect(lines[0]).to.contain(path.join('a', 'terragrunt.hcl'));
+		expect(lines[1]).to.contain('EACCES');
+		expect(result.stderr).to.not.contain(path.join('c', 'terragrunt.hcl'));
+	});
 });
 
 describe('inOrder', function () {
