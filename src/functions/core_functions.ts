@@ -3,8 +3,9 @@ import path from 'node:path';
 
 import { URI } from 'vscode-uri';
 
+import { base64GzipCompat } from '../gzip-compat';
 import type { FunctionContext, RuntimeValue, ValueType } from '../model';
-import { makeArrayValue, makeBooleanValue, makeObjectValue, makeStringValue } from './utils';
+import { expectParams, makeArrayValue, makeBooleanValue, makeObjectValue, makeSensitiveValue, makeStringValue, unwrapSensitive } from './utils';
 
 const defaultRetryableErrors = [
 	'(?s).*Failed to load state.*tcp.*timeout.*',
@@ -174,6 +175,7 @@ export const coreFunctionGroup = {
             args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
+			expectParams(args, [0, 1, 2], 'find_in_parent_folders');
 			if (args.length > 0 && (args[0]?.type !== 'string' || !args[0].value)) {
 				throw new Error('find_in_parent_folders requires an explicit filename');
 			}
@@ -281,9 +283,10 @@ export const coreFunctionGroup = {
             args: RuntimeValue<ValueType>[],
             context: FunctionContext
         ): Promise<RuntimeValue<ValueType>> => {
-            if (args.length === 0 || args[0].type !== 'string') {
-                throw new Error('get_env requires at least one string argument');
+            if (args.length < 1 || args.length > 2) {
+                throw new Error(`parsing get_env parameters: InvalidGetEnvParamsError: Expected one or two parameters (getEnv("<NAME>", "[DEFAULT]")) for get_env but got ${args.length}.`);
             }
+            if (args[0].type !== 'string') throw new Error('get_env requires a string argument');
 
             const envName = String(args[0].value);
 			const defaultValue = args[1]?.type === 'string' ? String(args[1].value) : undefined;
@@ -295,6 +298,7 @@ export const coreFunctionGroup = {
         },
         get_default_retryable_errors: async () => makeArrayValue(defaultRetryableErrors.map(makeStringValue)),
         constraint_check: async (args: RuntimeValue<ValueType>[]) => {
+            expectParams(args, [2], 'constraint_check');
             const version = String(args[0]?.value ?? '');
             const constraint = String(args[1]?.value ?? '');
             const actual = version.split('.').map(part => Number.parseInt(part, 10));
@@ -342,6 +346,24 @@ export const coreFunctionGroup = {
                 mergeRuntimeMaps(merged, argument.value as Map<string, RuntimeValue<ValueType>>);
             }
             return makeObjectValue(merged);
+        },
+        base64gzip_compat: async (
+            args: RuntimeValue<ValueType>[],
+            context: FunctionContext
+        ): Promise<RuntimeValue<ValueType>> => {
+            const [argument] = args;
+            const sensitive = (argument.type as string) === 'sensitive';
+            const value = unwrapSensitive(argument);
+            if (value.type === 'null') throw new Error('Invalid value for "str" parameter: argument must not be null.');
+            if (value.type !== 'string' && value.type !== 'number' && value.type !== 'boolean') {
+                throw new Error('Invalid value for "str" parameter: string required.');
+            }
+            if (!context.experiments?.includes('base64gzip-compat')) {
+                const configPath = URI.parse(context.document.uri).fsPath;
+                throw new Error(`base64gzip_compat in ${configPath} requires the 'base64gzip-compat' experiment; enable it with --experiment base64gzip-compat`);
+            }
+            const encoded = makeStringValue(base64GzipCompat(String(value.value)));
+            return sensitive ? makeSensitiveValue(encoded) : encoded;
         }
     }
 };

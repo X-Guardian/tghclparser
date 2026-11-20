@@ -24,22 +24,42 @@ export const ENCRYPTED_SOPS_JSON = JSON.stringify({
 	sops: { kms: [{ arn: 'arn:aws:kms:eu-west-2:123456789012:key/00000000-0000-0000-0000-000000000000' }], version: '3.9.0' }
 }, null, '\t');
 
-/** What the fixture's `sops` reports on every decrypt. */
-export const SOPS_KEY_FAILURE = 'Failed to get the data key required to decrypt the SOPS file.';
+/**
+ * The folder of a `sops` that cannot decrypt anything: every run reports "Failed to get the data key required to
+ * decrypt the SOPS file." and fails. It is a file of the repository rather than one each test writes, because macOS
+ * checks an executable the first time it runs, which costs a new file 75-250 ms on a quiet machine and several times
+ * that on a loaded one, against 15 ms for every later run of the same file.
+ */
+const SOPS_WITHOUT_KEY = path.resolve('tests/fixtures/sops-without-key');
 
 /**
  * Runs `work` with a `sops` on `PATH` that cannot decrypt anything, as on a machine without access to the key.
  *
- * @param directory a directory the fixture binary can be written under.
  * @param work what to run while that `sops` is first on `PATH`.
  * @returns whatever `work` returns.
  */
-export async function withoutSopsKey<T>(directory: string, work: () => Promise<T>): Promise<T> {
-	const bin = path.join(directory, 'sops-bin');
-	await fs.mkdir(bin, { recursive: true });
-	await fs.writeFile(path.join(bin, 'sops'), `#!/bin/sh\necho "${SOPS_KEY_FAILURE}" >&2\nexit 1\n`, { mode: 0o755 });
+export async function withoutSopsKey<T>(work: () => Promise<T>): Promise<T> {
 	const previous = process.env.PATH;
-	process.env.PATH = `${bin}${path.delimiter}${previous ?? ''}`;
+	process.env.PATH = `${SOPS_WITHOUT_KEY}${path.delimiter}${previous ?? ''}`;
+	try {
+		return await work();
+	} finally {
+		process.env.PATH = previous;
+	}
+}
+
+/**
+ * Runs `work` with no `sops` anywhere on `PATH`, as on a machine where it was never installed.
+ *
+ * @param directory a directory the empty `PATH` folder can be made under.
+ * @param work what to run while `PATH` holds only that folder.
+ * @returns whatever `work` returns.
+ */
+export async function withoutSops<T>(directory: string, work: () => Promise<T>): Promise<T> {
+	const bin = path.join(directory, 'empty-bin');
+	await fs.mkdir(bin, { recursive: true });
+	const previous = process.env.PATH;
+	process.env.PATH = bin;
 	try {
 		return await work();
 	} finally {

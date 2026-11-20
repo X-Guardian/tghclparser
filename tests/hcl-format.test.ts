@@ -6,7 +6,7 @@ import { unifiedDiff } from '../src/unified-diff';
 
 // Every expected text below is the reference's own output for the source beside it, recorded from hclwrite.Format
 // (github.com/hashicorp/hcl/v2 v2.25.0), which is all `terragrunt hcl format` does to a file it accepts, and from
-// `terragrunt hcl format --stdin --diff` (Terragrunt 1.1.5) for the diffs. None was written by hand or taken from
+// `terragrunt hcl format --stdin --diff` (Terragrunt 1.2.2) for the diffs. None was written by hand or taken from
 // this implementation.
 const layouts: { name: string; source: string; formatted: string }[] = [
 	{

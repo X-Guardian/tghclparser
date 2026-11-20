@@ -5,8 +5,9 @@ import path from 'node:path';
 
 import { expect } from 'chai';
 
-// `tghclp hcl format` stands in for `terragrunt hcl format`. What each case expects is what Terragrunt 1.1.5 does
-// with the same tree and arguments: which files it rewrites, what it prints, and how it exits.
+// `tghclp hcl format` stands in for `terragrunt hcl format`. What each case expects is what Terragrunt 1.2.2 does
+// with the same tree and arguments: which files it rewrites, what it prints on standard output, the files it names
+// and the errors it reports, and how it exits. The wording on standard error is tghclp's own.
 describe('CLI hcl format', function () {
 	this.timeout(30000);
 
