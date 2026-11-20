@@ -127,13 +127,14 @@ const maximumDefaultLength = 120;
 
 /**
  * Puts a `//subdirectory` in the form a path join gives it, as Terragrunt does: leading and trailing slashes are
- * dropped and repeated ones collapsed, so `modules/x//` and `modules//x` name `modules/x`.
+ * dropped, repeated ones collapsed and `.` segments removed, so `modules/x//`, `modules//x` and `./modules/x` name
+ * `modules/x`.
  *
  * @param subdirectory the text after the `//` separator.
  * @returns the subdirectory, empty when it names the module itself.
  */
 export function normaliseSubdirectory(subdirectory: string): string {
-	return subdirectory.replace(/\/{2,}/g, '/').replace(/^\/|\/$/g, '');
+	return subdirectory.split('/').filter(segment => segment !== '' && segment !== '.').join('/');
 }
 
 /**
